@@ -21,28 +21,24 @@ from PIL import Image, ImageDraw
 
 from core.constants import DEFAULT_CLASS_COLORS
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("AnnoMate.IOController")
 
 
 class IOController:
     def __init__(self, model):
         self.model = model
 
-    # ------------------------------------------------------------------ #
-    # Folder loading
-    # ------------------------------------------------------------------ #
-
     def load_folder(self, directory: str):
         """Scan a directory for images and load them into the model."""
+        logger.debug("Scanning directory for images: %s", directory)
+        
         exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
         files = sorted(
             f for f in os.listdir(directory) if Path(f).suffix.lower() in exts
         )
+        
+        logger.debug("Found %d valid images in folder.", len(files))
         self.model.load_folder(directory, files)
-
-    # ------------------------------------------------------------------ #
-    # Image display loading  (V3 fix: disk I/O leaves the View)
-    # ------------------------------------------------------------------ #
 
     def load_image_for_display(self, row: int) -> Optional[np.ndarray]:
         """
@@ -55,10 +51,6 @@ class IOController:
             logger.warning(f"Could not read image: {path}")
         return bgr
 
-    # ------------------------------------------------------------------ #
-    # Export
-    # ------------------------------------------------------------------ #
-
     def export_polygons_and_data(self, out_dir: str) -> str:
         """
         Write overlay images + a JSON data file to *out_dir*.
@@ -67,8 +59,11 @@ class IOController:
         """
         state = self.model.state
         if not state.image_files:
+            logger.warning("Attempted to export, but no images are loaded.")
             raise RuntimeError("No images loaded.")
 
+        logger.debug("Starting polygon export to: %s", out_dir)
+        
         out_path = Path(out_dir)
         tray_name = Path(state.image_dir).name if state.image_dir else "tray"
         timestamp = datetime.now().strftime("%m-%d-%y-%H-%M-%S")
@@ -131,6 +126,7 @@ class IOController:
         with open(data_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
 
+        logger.debug("Successfully exported %d overlay images and data JSON.", saved_count)
         return f"Saved {saved_count} image(s) + data JSON:\n{data_path}"
 
     def export_csv(self, out_path: str) -> str:

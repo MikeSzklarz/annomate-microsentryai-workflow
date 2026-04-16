@@ -1,4 +1,5 @@
 import os
+import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
@@ -7,6 +8,7 @@ from PySide6.QtGui import QColor, QBrush
 from core.state import DatasetState
 from core.utils import polygon_area
 
+logger = logging.getLogger("AnnoMate.DatasetModel")
 
 class DatasetTableModel(QAbstractTableModel):
     """
@@ -22,10 +24,6 @@ class DatasetTableModel(QAbstractTableModel):
         super().__init__(parent)
         self.state = state
         self.headers = ["Filename", "Status"]
-
-    # ------------------------------------------------------------------ #
-    # QAbstractTableModel interface
-    # ------------------------------------------------------------------ #
 
     def rowCount(self, parent=QModelIndex()) -> int:
         return len(self.state.image_files)
@@ -60,10 +58,6 @@ class DatasetTableModel(QAbstractTableModel):
 
         return None
 
-    # ------------------------------------------------------------------ #
-    # Write commands (called by Controllers and Views)
-    # ------------------------------------------------------------------ #
-
     def load_folder(self, directory: str, files: list):
         self.beginResetModel()
         self.state.clear()
@@ -73,13 +67,22 @@ class DatasetTableModel(QAbstractTableModel):
 
     def add_annotation(self, row: int, category: str, polygon: list):
         if not (0 <= row < self.rowCount()):
+            logger.error("Failed to add annotation: Row %d is out of bounds.", row)
             return
-        self.state.add_annotation(self.state.image_files[row], category, polygon)
+        
+        filename = self.state.image_files[row]
+        logger.debug("Adding '%s' annotation to '%s' (%d points)", category, filename, len(polygon))
+        
+        self.state.add_annotation(filename, category, polygon)
         self._emit_row(row)
 
     def delete_annotation(self, row: int, annotation_idx: int):
         if not (0 <= row < self.rowCount()):
             return
+        
+        filename = self.state.image_files[row]
+        logger.debug("Deleted annotation at index %d from '%s'", annotation_idx, filename)
+        
         self.state.delete_annotation(self.state.image_files[row], annotation_idx)
         self._emit_row(row)
 

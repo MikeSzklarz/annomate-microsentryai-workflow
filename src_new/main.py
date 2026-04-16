@@ -1,7 +1,9 @@
 import sys
 from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget, QVBoxLayout, QWidget
 
-# 1. Imports from the new MVC architecture
+from core.logger import setup_logging
+setup_logging()
+    
 from core.state import DatasetState
 from models.dataset_model import DatasetTableModel
 
@@ -19,41 +21,23 @@ class AppWindow(QMainWindow):
         self.setWindowTitle("AnnoMate & MicroSentryAI (MVC)")
         self.resize(1400, 900)
 
-        # =========================================================
-        # 1. INITIALIZE DATA & MODEL (Single Source of Truth)
-        # =========================================================
         self.app_state = DatasetState()
         self.dataset_model = DatasetTableModel(self.app_state)
 
-        # =========================================================
-        # 2. INITIALIZE CONTROLLERS (Business Logic Handlers)
-        # =========================================================
         self.io_controller = IOController(self.dataset_model)
         # self.inference_controller = InferenceController(self.dataset_model)
         # self.validation_controller = ValidationController(self.dataset_model)
 
-        # =========================================================
-        # 3. INITIALIZE VIEWS (Injecting Model and Controllers)
-        # =========================================================
-        # Views only know how to display the Model and tell Controllers what the user clicked.
         self.annomate_view = ImageAnnotator(self.dataset_model, self.io_controller)
         # self.sentry_view = MicroSentryWindow(self.dataset_model, self.inference_controller)
         # self.validation_view = ValidationTab(self.validation_controller)
 
-        # # =========================================================
-        # # 4. WIRE THE QT MVC CONNECTIONS (The Magic)
-        # # =========================================================
-        # # Force MicroSentry's table to share the exact same selection state as AnnoMate's table.
-        # # When a user clicks a row in AnnoMate, MicroSentry's table updates instantly.
         # shared_selection_model = self.annomate_view.table_view.selectionModel()
         # self.sentry_view.table_view.setSelectionModel(shared_selection_model)
 
         # # Connect view signals (Canvas View syncing, etc.)
         # self._setup_view_syncing()
 
-        # =========================================================
-        # 5. UI LAYOUT SETUP
-        # =========================================================
         self.tabs = QTabWidget()
         self.tabs.addTab(self.annomate_view, "AnnoMate")
         # self.tabs.addTab(self.sentry_view, "MicroSentry AI")
