@@ -24,17 +24,20 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 
+from core.utils import scale_polygon_about_center
 from views.annomate.image_label import ImageLabel, POLYGON
 from views.annomate.widgets import CustomSplitter
 
 
 class ImageAnnotator(QMainWindow):
-    viewChanged = Signal(float, float, float)   # reserved for future multi-tab sync
+    viewChanged          = Signal(float, float, float)   # reserved for future multi-tab sync
+    row_selection_changed = Signal(int)  # emitted when the current row changes (for cross-tab sync)
 
     def __init__(self, model, io_controller):
         super().__init__()
         self.model = model
         self.io_controller = io_controller
+        self._syncing = False   # guard against recursive cross-tab row sync
 
         self._init_ui()
         self._setup_connections()
@@ -55,7 +58,6 @@ class ImageAnnotator(QMainWindow):
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         self.canvas = ImageLabel(self)
-        self.canvas.set_main_window(self)
         layout.addWidget(self.canvas)
         self.main_splitter.addWidget(container)
 
@@ -206,6 +208,12 @@ class ImageAnnotator(QMainWindow):
         self.model.modelReset.connect(self.on_model_reset)
         self.model.dataChanged.connect(self.on_model_data_changed)
 
+        # Canvas signals replace the old main_window hasattr callbacks
+        self.canvas.polygonFinished.connect(self.finish_polygon)
+        self.canvas.polygonEdited.connect(self.update_polygon_points)
+        self.canvas.polygonSelected.connect(self.on_polygon_selected)
+        self.canvas.toolCanceled.connect(lambda: self.btn_poly.setChecked(False))
+
         self.class_combo.currentTextChanged.connect(self.update_canvas_active_color)
         self.btn_add_class.clicked.connect(self.add_class_from_edit)
         self.btn_color.clicked.connect(self.change_class_color)
@@ -245,6 +253,12 @@ class ImageAnnotator(QMainWindow):
         else:
             self.lbl_img.setText("0 / 0")
 
+    def select_row(self, row: int):
+        """Public API for cross-pane row sync. Suppresses recursive sync emission."""
+        self._syncing = True
+        self.table_view.selectRow(row)
+        self._syncing = False
+
     def on_table_selection_changed(self, selected, deselected):
         indexes = self.table_view.selectionModel().selectedRows()
         if not indexes:
@@ -259,6 +273,8 @@ class ImageAnnotator(QMainWindow):
             self.refresh_meta_fields(row)
 
         self._update_image_counter(row)
+        if not self._syncing:
+            self.row_selection_changed.emit(row)
 
     def next_image(self):
         sel = self.table_view.selectionModel()
@@ -286,7 +302,11 @@ class ImageAnnotator(QMainWindow):
             return
         current_row = sel.currentIndex().row()
         if top_left.row() <= current_row <= bottom_right.row():
-            self.refresh_image_view(current_row)
+            # Do not replace overlays while a vertex/polygon drag is live; the
+            # drag preview lives in _overlays and would be silently discarded,
+            # causing the commit on mouseRelease to write stale coordinates.
+            if not self.canvas.is_dragging():
+                self.refresh_image_view(current_row)
 
     # ================================================================== #
     # Slots — Canvas callbacks (called by ImageLabel)
@@ -515,9 +535,7 @@ class ImageAnnotator(QMainWindow):
         pts = annos[idx]["polygon"]
         if not pts:
             return
-        cx = sum(p[0] for p in pts) / len(pts)
-        cy = sum(p[1] for p in pts) / len(pts)
-        new_pts = [(cx + (p[0] - cx) * factor, cy + (p[1] - cy) * factor) for p in pts]
+        new_pts = scale_polygon_about_center(pts, factor)
         self.model.update_annotation_points(row, idx, new_pts)
 
     # ================================================================== #

@@ -12,7 +12,6 @@ def app_window(qtbot, tmp_path):
     controller = IOController(model)
     window = ImageAnnotator(model, controller)
     qtbot.addWidget(window)
-    window.show()
 
     (tmp_path / "a.jpg").touch()
     (tmp_path / "b.jpg").touch()

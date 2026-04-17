@@ -8,9 +8,9 @@ No domain logic — only rendering and interaction.
 import logging
 from typing import List, Tuple, Optional
 
-import numpy as np
-import cv2
 from PIL import Image
+
+from core.utils import simplify_polygon, scale_polygon_about_center
 
 from PySide6.QtCore import Qt, QPointF, QRectF, Signal
 from PySide6.QtGui import (
@@ -147,13 +147,11 @@ class SegPathItem(QGraphicsPathItem):
                 self.on_any_edit("vertex_drag")
 
     def simplify(self, epsilon: float):
-        if len(self._pts) < 3:
+        pts_xy = [(p.x(), p.y()) for p in self._pts]
+        result = simplify_polygon(pts_xy, epsilon)
+        if result is pts_xy:
             return
-        cnt = np.array([[[p.x(), p.y()]] for p in self._pts], dtype=np.float32)
-        approx = cv2.approxPolyDP(cnt, epsilon=epsilon, closed=True)
-        if approx is None or len(approx) < 3:
-            return
-        self._pts = [QPointF(float(p[0][0]), float(p[0][1])) for p in approx]
+        self._pts = [QPointF(x, y) for (x, y) in result]
         self._rebuild_path()
         if self.handles:
             for h in self.handles:
@@ -177,12 +175,9 @@ class SegPathItem(QGraphicsPathItem):
     def scale_about_center(self, factor: float):
         if not self._pts:
             return
-        cx = sum(p.x() for p in self._pts) / len(self._pts)
-        cy = sum(p.y() for p in self._pts) / len(self._pts)
-        self._pts = [
-            QPointF(cx + (p.x() - cx) * factor, cy + (p.y() - cy) * factor)
-            for p in self._pts
-        ]
+        pts_xy = [(p.x(), p.y()) for p in self._pts]
+        scaled = scale_polygon_about_center(pts_xy, factor)
+        self._pts = [QPointF(x, y) for (x, y) in scaled]
         for i, h in enumerate(self.handles):
             h.setPos(self._pts[i])
         self._rebuild_path()

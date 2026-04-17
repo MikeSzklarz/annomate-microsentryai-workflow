@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch
 
 from core.validation_state import ValidationState
 from models.validation_model import ValidationModel
@@ -13,7 +14,6 @@ def validation_window(qtbot):
     controller = ValidationController(model)
     window     = ValidationWindow(model, controller)
     qtbot.addWidget(window)
-    window.show()
     return window, model, controller
 
 
@@ -85,7 +85,6 @@ class TestValidationWindowResultsFeed:
 
     def test_add_result_card_appends_widget(self, validation_window, tmp_path):
         window, _, _ = validation_window
-        # Create a minimal 1x1 white PNG so QPixmap load doesn't fail silently
         import cv2, numpy as np
         img_path = str(tmp_path / "overlay.png")
         cv2.imwrite(img_path, np.ones((10, 10, 3), dtype=np.uint8) * 200)
@@ -95,20 +94,22 @@ class TestValidationWindowResultsFeed:
 
 class TestValidationWindowRunGuards:
     def test_run_generation_without_paths_does_not_disable_buttons(
-        self, validation_window, qtbot
+        self, validation_window
     ):
         window, _, _ = validation_window
-        # can_generate() is False — window shows a warning dialog.
-        # In headless test, QMessageBox.warning() auto-closes; buttons stay enabled.
-        qtbot.waitSignal(window.btn_gen.clicked, timeout=0, raising=False)
-        window._run_generation()
+        # Patch QMessageBox so the blocking warning dialog never appears.
+        with patch("views.validation.window.QMessageBox") as mock_qmb:
+            mock_qmb.warning.return_value = None
+            window._run_generation()
         assert window.btn_gen.isEnabled()
 
     def test_run_evaluation_without_paths_does_not_disable_buttons(
-        self, validation_window, qtbot
+        self, validation_window
     ):
         window, _, _ = validation_window
-        window._run_evaluation()
+        with patch("views.validation.window.QMessageBox") as mock_qmb:
+            mock_qmb.warning.return_value = None
+            window._run_evaluation()
         assert window.btn_run.isEnabled()
 
 

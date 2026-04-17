@@ -113,6 +113,11 @@ class DatasetTableModel(QAbstractTableModel):
     def set_class_color(self, name: str, color: tuple):
         """Update an existing class's display color."""
         self.state.class_colors[name] = color
+        if self.rowCount() > 0:
+            self.dataChanged.emit(
+                self.index(0, 0),
+                self.index(self.rowCount() - 1, self.columnCount() - 1),
+            )
 
     def delete_class(self, name: str):
         self.state.delete_class(name)

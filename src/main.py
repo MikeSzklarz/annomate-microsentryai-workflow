@@ -48,28 +48,18 @@ class AppWindow(QMainWindow):
         # Views
         self.annomate_view    = ImageAnnotator(self.dataset_model, self.io_controller)
         self.sentry_view      = MicroSentryWindow(
-            self.dataset_model, self.inference_model, self.inference_controller
+            self.dataset_model,
+            self.inference_model,
+            self.inference_controller,
+            self.io_controller,
         )
         self.validation_view  = ValidationWindow(
             self.validation_model, self.validation_controller
         )
 
-        # Cross-tab row sync via selection signals (proxy models differ, so we
-        # use explicit signal connections rather than a shared QItemSelectionModel)
-        annomate_sel = self.annomate_view.table_view.selectionModel()
-        sentry_sel   = self.sentry_view.table_view.selectionModel()
-        annomate_sel.currentRowChanged.connect(
-            lambda c, _: sentry_sel.setCurrentIndex(
-                self.sentry_view._proxy.index(c.row(), 0),
-                sentry_sel.ClearAndSelect | sentry_sel.Rows,
-            )
-        )
-        sentry_sel.currentRowChanged.connect(
-            lambda c, _: annomate_sel.setCurrentIndex(
-                self.dataset_model.index(c.row(), 0),
-                annomate_sel.ClearAndSelect | annomate_sel.Rows,
-            )
-        )
+        # Cross-tab row sync via each view's public API — no access to internal widgets
+        self.annomate_view.row_selection_changed.connect(self.sentry_view.select_row)
+        self.sentry_view.row_selection_changed.connect(self.annomate_view.select_row)
 
         # Polygon transfer: MicroSentry → AnnoMate
         self.sentry_view.polygonsSent.connect(self._handle_polygon_transfer)

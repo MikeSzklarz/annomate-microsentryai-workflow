@@ -9,7 +9,7 @@ Rules:
 
 import logging
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Type
 
 import numpy as np
 import cv2
@@ -17,7 +17,7 @@ from PIL import Image
 from scipy.ndimage import gaussian_filter
 from matplotlib import colormaps as mpl_cmaps
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal
 
 from models.dataset_model import DatasetTableModel
 from models.inference_model import InferenceModel
@@ -54,10 +54,27 @@ class InferenceWorker(QThread):
         self._running = False
 
 
-class InferenceController:
-    def __init__(self, dataset_model: DatasetTableModel, inference_model: InferenceModel):
+class InferenceController(QObject):
+    """
+    Owns the InferenceWorker lifecycle and exposes proxy signals so the View
+    never holds a direct reference to the worker thread.
+    """
+
+    result_ready = Signal(str, object)  # (path, score_map)
+    progress     = Signal(int)          # images processed so far
+    batch_done   = Signal()             # all images in a batch finished
+
+    def __init__(
+        self,
+        dataset_model: DatasetTableModel,
+        inference_model: InferenceModel,
+        strategy_class: Optional[Type] = None,
+        parent: Optional[QObject] = None,
+    ):
+        super().__init__(parent)
         self.dataset_model = dataset_model
         self.inference_model = inference_model
+        self._strategy_class = strategy_class
         self._strategy = None
         self._worker: Optional[InferenceWorker] = None
 
@@ -67,8 +84,12 @@ class InferenceController:
 
     def load_model(self, model_path: str, device: str) -> str:
         """Load a .pt or .ckpt model. Returns model_name. Raises RuntimeError on failure."""
-        from ai_strategies.anomalib_strategy import AnomalibStrategy
-        strategy = AnomalibStrategy()
+        if self._strategy_class is None:
+            from ai_strategies.anomalib_strategy import AnomalibStrategy
+            strategy_class = AnomalibStrategy
+        else:
+            strategy_class = self._strategy_class
+        strategy = strategy_class()
         strategy.set_device(device.lower())
         strategy.load_from_file(model_path)   # raises on failure
         self._strategy = strategy
@@ -97,20 +118,27 @@ class InferenceController:
     # Background inference
     # ------------------------------------------------------------------ #
 
-    def start_batch_inference(self, file_paths: List[str]) -> InferenceWorker:
+    def start_batch_inference(self, file_paths: List[str]) -> None:
         """
-        Create and return an InferenceWorker for the given paths.
-        Caller must connect signals, then call worker.start().
-        Any previously running worker is stopped first.
+        Stop any running worker, create a new one for *file_paths*, and start it.
+        The caller should connect to result_ready / progress / batch_done ONCE
+        (e.g. in the view's __init__) rather than per call.
         """
         self._stop_worker()
         self._worker = InferenceWorker(self._strategy, file_paths)
-        return self._worker
+        self._worker.resultReady.connect(self.result_ready)
+        self._worker.progress.connect(self.progress)
+        self._worker.finished.connect(self.batch_done)
+        self._worker.start()
 
     def _stop_worker(self):
         if self._worker and self._worker.isRunning():
+            self._worker.blockSignals(True)   # prevent stale signals from reaching proxies
             self._worker.stop()
             self._worker.wait()
+        if self._worker:
+            self._worker.deleteLater()
+            self._worker = None
 
     # ------------------------------------------------------------------ #
     # Visualisation computation (pure Python, no Qt)

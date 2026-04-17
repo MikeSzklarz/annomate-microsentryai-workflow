@@ -6,8 +6,6 @@ All dialogs here; all computation delegated to InferenceController.
 MVC rule: never access .state directly — use model query API only.
 """
 
-import os
-import glob
 import logging
 from pathlib import Path
 from typing import Optional, List
@@ -29,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from models.dataset_model import DatasetTableModel
 from models.inference_model import InferenceModel
+from controllers.io_controller import IOController
 from controllers.inference_controller import InferenceController
 from views.microsentry.canvas import CanvasPair, SegPathItem
 
@@ -92,22 +91,27 @@ class MicroSentryWindow(QWidget):
         dataset_model        — shared QAbstractTableModel (image list + filenames)
         inference_model      — pure-Python model for heatmap/score-map results
         inference_controller — headless inference + visualisation logic
+        io_controller        — shared file I/O controller (folder scanning)
     """
 
-    polygonsSent = Signal(list, str)           # (polygons in original coords, default class)
-    viewChanged  = Signal(float, float, float) # rx, ry, scale — cross-tab pan/zoom sync
+    polygonsSent          = Signal(list, str)           # (polygons in original coords, default class)
+    viewChanged           = Signal(float, float, float) # rx, ry, scale — cross-tab pan/zoom sync
+    row_selection_changed = Signal(int)                 # emitted when the current row changes
 
     def __init__(
         self,
         dataset_model: DatasetTableModel,
         inference_model: InferenceModel,
         inference_controller: InferenceController,
+        io_controller: IOController,
         parent=None,
     ):
         super().__init__(parent)
         self.dataset_model = dataset_model
         self.inference_model = inference_model
         self.inference_controller = inference_controller
+        self.io_controller = io_controller
+        self._syncing = False  # guard against recursive cross-tab row sync
 
         # Transient view state (not domain data)
         self._current_row: int = -1
@@ -117,7 +121,6 @@ class MicroSentryWindow(QWidget):
         self._undo_stack: List[list] = []
         self._redo_stack: List[list] = []
         self._block_history: bool = False
-        self._worker = None
 
         self._cached_heatmap_result = None  # (left_pil, right_pil, scale, offset, s, display_w, display_h)
         self._cached_heatmap_params = None  # (alpha, sigma, display_target, heat_min_pct, image_path)
@@ -129,6 +132,11 @@ class MicroSentryWindow(QWidget):
         self._init_ui()
         self._connect_signals()
         self._setup_shortcuts()
+
+        # Connect to controller proxy signals once — controller owns the worker
+        self.inference_controller.result_ready.connect(self._on_worker_result)
+        self.inference_controller.progress.connect(self.progress_bar.setValue)
+        self.inference_controller.batch_done.connect(self._on_worker_finished)
 
         self.dataset_model.modelReset.connect(self._on_model_reset)
 
@@ -337,17 +345,22 @@ class MicroSentryWindow(QWidget):
         self._undo_stack.clear()
         self._redo_stack.clear()
         self._load_and_render(row)
+        if not self._syncing:
+            self.row_selection_changed.emit(row)
 
     def _prev_image(self):
         if self._current_row > 0:
-            self._select_row(self._current_row - 1)
+            self.select_row(self._current_row - 1)
 
     def _next_image(self):
         if self._current_row < self.dataset_model.rowCount() - 1:
-            self._select_row(self._current_row + 1)
+            self.select_row(self._current_row + 1)
 
-    def _select_row(self, row: int):
+    def select_row(self, row: int):
+        """Public API for cross-pane row sync. Suppresses recursive sync emission."""
+        self._syncing = True
         self.table_view.setCurrentIndex(self._proxy.index(row, 0))
+        self._syncing = False
 
     # ------------------------------------------------------------------
     # Image loading and rendering
@@ -495,27 +508,15 @@ class MicroSentryWindow(QWidget):
         if not folder:
             return
 
-        files: List[str] = []
-        for ext in ("*.png", "*.jpg", "*.jpeg", "*.bmp"):
-            files.extend(glob.glob(os.path.join(folder, ext)))
-        files = sorted(files)
+        # Delegate scanning to IOController so folder-load behaviour is consistent
+        # across both panes.  _on_model_reset fires synchronously via modelReset.
+        self.io_controller.load_folder(folder)
 
-        if not files:
+        if self.dataset_model.rowCount() == 0:
             QMessageBox.information(self, "No Images", "No compatible images found.")
             return
 
-        self.inference_model.clear()
-        self.dataset_model.load_folder(folder, [Path(f).name for f in files])
-
-        self._current_row = -1
-        self._current_pil = None
-        self._undo_stack.clear()
-        self._redo_stack.clear()
-
-        self._select_row(0)
-
-        if self.inference_controller.has_model():
-            self._start_background_inference()
+        self.select_row(0)
 
     def _on_model_reset(self):
         """React to dataset model reload (e.g. folder loaded from AnnoMate)."""
@@ -553,12 +554,8 @@ class MicroSentryWindow(QWidget):
         self.progress_bar.setRange(0, len(pending))
         self.progress_bar.setValue(0)
 
-        worker = self.inference_controller.start_batch_inference(pending)
-        worker.resultReady.connect(self._on_worker_result)
-        worker.progress.connect(self.progress_bar.setValue)
-        worker.finished.connect(self._on_worker_finished)
-        self._worker = worker
-        worker.start()
+        # Controller owns the worker; signals are wired once in __init__
+        self.inference_controller.start_batch_inference(pending)
 
     def _on_worker_result(self, path: str, score_map):
         self.inference_model.set_score_map(path, score_map)
