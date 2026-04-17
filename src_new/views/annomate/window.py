@@ -519,3 +519,17 @@ class ImageAnnotator(QMainWindow):
         cy = sum(p[1] for p in pts) / len(pts)
         new_pts = [(cx + (p[0] - cx) * factor, cy + (p[1] - cy) * factor) for p in pts]
         self.model.update_annotation_points(row, idx, new_pts)
+
+    # ================================================================== #
+    # Cross-pane API — called by main.py polygon transfer handler
+    # ================================================================== #
+
+    def receive_polygons(self, polygons: list, class_name: str):
+        """Add polygons sent from MicroSentryAI to the currently selected image."""
+        sel = self.table_view.selectionModel()
+        if not sel.hasSelection():
+            return
+        row = sel.currentIndex().row()
+        for pts in polygons:
+            self.model.add_annotation(row, class_name, pts)
+        self.refresh_image_view(row)
