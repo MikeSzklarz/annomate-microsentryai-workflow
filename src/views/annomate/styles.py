@@ -177,7 +177,7 @@ MAIN_STYLESHEET = """
 SPLITTER_STYLE = """
     /* --- Splitter Handle Styling --- */
     QSplitter::handle {
-        background-color: #004253;
+        background-color: #74797a;
         border: 1px solid #001021;
         border-radius: 2px;
         image: none;

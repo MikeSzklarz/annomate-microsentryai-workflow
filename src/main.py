@@ -20,6 +20,7 @@ from controllers.validation_controller import ValidationController
 from views.annomate.window import ImageAnnotator
 from views.microsentry.window import MicroSentryWindow
 from views.validation.window import ValidationWindow
+from views.annomate_v2.window import AnnoMateV2Window
 
 
 class AppWindow(QMainWindow):
@@ -46,6 +47,7 @@ class AppWindow(QMainWindow):
         self.validation_controller = ValidationController(self.validation_model)
 
         # Views
+        self.annomate_v2_view = AnnoMateV2Window()
         self.annomate_view    = ImageAnnotator(self.dataset_model, self.io_controller)
         self.sentry_view      = MicroSentryWindow(
             self.dataset_model,
@@ -65,9 +67,10 @@ class AppWindow(QMainWindow):
         self.sentry_view.polygonsSent.connect(self._handle_polygon_transfer)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self.annomate_view,   "AnnoMate")
-        self.tabs.addTab(self.sentry_view,     "MicroSentry AI")
-        self.tabs.addTab(self.validation_view, "Validation")
+        self.tabs.addTab(self.annomate_view,    "AnnoMate")
+        self.tabs.addTab(self.sentry_view,      "MicroSentry AI")
+        self.tabs.addTab(self.validation_view,  "Validation")
+        self.tabs.addTab(self.annomate_v2_view, "AnnoMate V2  ✦")
 
         central_widget = QWidget()
         layout = QVBoxLayout(central_widget)
