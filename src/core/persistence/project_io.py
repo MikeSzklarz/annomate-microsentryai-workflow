@@ -51,6 +51,7 @@ class ProjectIO:
         inference_state,
         created_at: Optional[str] = None,
         save_score_maps: bool = True,
+        model_path: str = "",
     ) -> str:
         """Write .annoproj + annotations.coco.json to project_dir.
 
@@ -66,6 +67,7 @@ class ProjectIO:
             inference_state: InferenceState instance.
             created_at: ISO timestamp from the original save; if None, uses now.
             save_score_maps: When True, write inference score maps to NPZ.
+            model_path: Absolute path to the inference model file (informational).
         """
         project_dir = str(Path(project_dir).resolve())
         os.makedirs(project_dir, exist_ok=True)
@@ -126,6 +128,7 @@ class ProjectIO:
             "inference": {
                 "score_cache": dict(inference_state.inference_cache),
                 "score_maps_file": score_maps_file,
+                "model_path": model_path,
             },
         }
 
@@ -180,10 +183,11 @@ class ProjectIO:
     ) -> None:
         """Mutate the three state objects from load_project() output.
 
-        Assumes load_folder() has already been called on the dataset so that
-        image_files is populated and per-image state has been cleared. This
-        method then repopulates annotations, class registry, inspectors, notes,
-        validation paths, and inference cache on top of that cleared state.
+        Does NOT touch image_dir or image_files — those must be set by the
+        caller before invoking this method (e.g. via ProjectController which
+        scans the directory first). This method repopulates annotations,
+        class registry, inspectors, notes, validation paths, and inference
+        cache on top of whatever image list is already in state.
 
         Args:
             project_data: Dict returned by load_project().
@@ -276,13 +280,11 @@ class ProjectIO:
             "annotations": [],
         }
 
-        # categories: one entry per class in registry order
         cat_id_map = {}
         for i, name in enumerate(dataset_state.class_names, start=1):
             coco["categories"].append({"id": i, "name": name, "supercategory": ""})
             cat_id_map[name] = i
 
-        # images + annotations
         ann_id = 1
         for img_id, fname in enumerate(dataset_state.image_files, start=1):
             img_path = (
@@ -300,7 +302,6 @@ class ProjectIO:
                 cat_name = ann_rec["category_name"]
                 cat_id = cat_id_map.get(cat_name)
                 if cat_id is None:
-                    # category added after class_names was serialised — register it
                     cat_id = len(coco["categories"]) + 1
                     coco["categories"].append(
                         {"id": cat_id, "name": cat_name, "supercategory": ""}
@@ -395,17 +396,13 @@ class ProjectIO:
         """Return (width, height) via PIL. Returns (0, 0) if file is missing."""
         try:
             with Image.open(image_path) as img:
-                return img.size  # (width, height)
+                return img.size
         except Exception:
             logger.debug("Could not read dimensions for: %s", image_path)
             return (0, 0)
 
     def _resolve_coco_path(self, annoproj_path: str, proj_data: dict) -> str:
-        """Resolve the COCO JSON path from project data.
-
-        Tries annotations_file_abs first; falls back to resolving
-        annotations_file relative to the project directory.
-        """
+        """Resolve the COCO JSON path: try absolute first, then relative."""
         abs_path = proj_data.get("annotations_file_abs", "")
         if abs_path and os.path.exists(abs_path):
             return abs_path
@@ -416,8 +413,18 @@ class ProjectIO:
 
     def _filename_to_npz_key(self, fname: str) -> str:
         """Sanitize a filename to a valid NPZ array key."""
-        return fname.replace(".", "__dot__").replace("/", "__slash__").replace("\\", "__bslash__")
+        return (
+            fname
+            .replace(".", "__dot__")
+            .replace("/", "__slash__")
+            .replace("\\", "__bslash__")
+        )
 
     def _npz_key_to_filename(self, key: str) -> str:
         """Reverse _filename_to_npz_key."""
-        return key.replace("__bslash__", "\\").replace("__slash__", "/").replace("__dot__", ".")
+        return (
+            key
+            .replace("__bslash__", "\\")
+            .replace("__slash__", "/")
+            .replace("__dot__", ".")
+        )

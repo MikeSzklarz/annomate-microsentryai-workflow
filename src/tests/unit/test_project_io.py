@@ -2,7 +2,7 @@ import json
 import pytest
 import numpy as np
 
-from core.project_io import ProjectIO
+from core.persistence.project_io import ProjectIO
 from core.states.dataset_state import DatasetState
 from core.states.inference_state import InferenceState
 from core.states.validation_state import ValidationState
