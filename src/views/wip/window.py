@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt, QEvent, QPointF, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QSizePolicy,
-    QSplitter, QToolButton, QFileDialog, QInputDialog, QMessageBox, QHBoxLayout, QComboBox
+    QSplitter, QToolButton, QFileDialog, QMessageBox, QHBoxLayout, QComboBox
 )
 
 from views.annomate.image_label import ImageLabel
@@ -153,6 +153,7 @@ class WIPWindow(QWidget):
         self._current_bgr = None
         self._current_ai_contours: list = []
         self._selected_ai_idx: int = -1
+        self._saved_model_path: str = ""
         self._init_ui()
 
         # Dataset changes
@@ -176,6 +177,7 @@ class WIPWindow(QWidget):
         self.right_panel.next_requested.connect(self._next_image)
         self.right_panel.annotation_selected.connect(self._on_annotation_selected)
         self.right_panel.load_model_requested.connect(self._on_load_model_requested)
+        self.right_panel.load_previous_model_requested.connect(self._on_load_previous_model_requested)
         self.right_panel.microsentry_settings_changed.connect(self._refresh_canvas_render)
         self.right_panel.accept_polygons_requested.connect(self._on_accept_ai_polygons)
 
@@ -404,16 +406,45 @@ class WIPWindow(QWidget):
     # Microsentry toggle & rendering
     # ------------------------------------------------------------------ #
 
+    def set_saved_model_path(self, path: str) -> None:
+        """Called by AppWindow after opening a project to record the saved model path."""
+        self._saved_model_path = path
+
+    # ------------------------------------------------------------------ #
+    # Microsentry toggle & rendering
+    # ------------------------------------------------------------------ #
+
     def _on_microsentry_toggled(self, checked: bool) -> None:
         self._microsentry_enabled = checked
         if checked:
             if self.inference_controller is not None and self.inference_controller.has_model():
-                self.right_panel.set_model_loaded(self.inference_controller.get_model_name())
+                self.right_panel.set_model_loaded(
+                    self.inference_controller.get_model_name(),
+                    self.inference_controller.get_model_path(),
+                )
                 self._start_pending_inference()
             self.right_panel.show_microsentry_section()
         else:
             self.right_panel.hide_microsentry_section()
         self._refresh_canvas_render()
+
+    def _on_load_previous_model_requested(self) -> None:
+        if self.inference_controller is None:
+            return
+        if not self._saved_model_path:
+            QMessageBox.information(
+                self, "Load Previous Model",
+                "No model path found in the current project.\n"
+                "Open a project that was saved with a model loaded, or use 'Load New'.",
+            )
+            return
+        if not os.path.isfile(self._saved_model_path):
+            QMessageBox.warning(
+                self, "Load Previous Model",
+                f"The saved model file no longer exists:\n{self._saved_model_path}\n\nUse 'Load New' to browse for it.",
+            )
+            return
+        self._load_model_from_path(self._saved_model_path)
 
     def _on_load_model_requested(self) -> None:
         if self.inference_controller is None:
@@ -423,17 +454,15 @@ class WIPWindow(QWidget):
         )
         if not path:
             return
-        device, ok = QInputDialog.getItem(
-            self, "Select Device", "Inference device:", ["cpu", "cuda"], 0, False
-        )
-        if not ok:
-            return
+        self._load_model_from_path(path)
+
+    def _load_model_from_path(self, path: str) -> None:
         try:
-            name = self.inference_controller.load_model(path, device)
+            name = self.inference_controller.load_model(path)
         except Exception as exc:
             QMessageBox.critical(self, "Load Model", f"Could not load model:\n{exc}")
             return
-        self.right_panel.set_model_loaded(name)
+        self.right_panel.set_model_loaded(name, path)
         self._start_pending_inference()
 
     def _start_pending_inference(self) -> None:

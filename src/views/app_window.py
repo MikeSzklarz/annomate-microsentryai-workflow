@@ -178,9 +178,10 @@ class AppWindow(QMainWindow):
             QMessageBox.warning(self, "Open Project", "\n\n".join(warnings))
 
         model_path = project_data.get("inference", {}).get("model_path", "")
+        self.wip_view.set_saved_model_path(model_path)
         if model_path and not self.inference_controller.has_model():
             self.statusBar().showMessage(
-                f"Previous model: {model_path} — reload it in MicroSentry AI if needed.",
+                f"Previous model saved: {os.path.basename(model_path)} — use 'Load Previous' in the WIP Microsentry panel.",
                 8000,
             )
 

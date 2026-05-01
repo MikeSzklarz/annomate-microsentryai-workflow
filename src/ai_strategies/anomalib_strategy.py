@@ -296,7 +296,16 @@ class AnomalibStrategy:
 
             self.model_type = "torch"
             resolved_device = self._resolve_device()
-            final_device = resolved_device.upper()
+            if resolved_device == "cuda":
+                try:
+                    gpu_name = torch.cuda.get_device_name(0)
+                    final_device = f"CUDA ({gpu_name})"
+                except Exception:
+                    final_device = "CUDA"
+            elif resolved_device == "mps":
+                final_device = "MPS (Apple Silicon)"
+            else:
+                final_device = "CPU"
 
             import functools
             original_torch_load = torch.load
@@ -370,7 +379,7 @@ class AnomalibStrategy:
                     except Exception as mps_err:
                         logger.debug("Failed to push raw model to MPS: %s", mps_err)
 
-                self.model_name = f"Raw PyTorch Model [{final_device}]"
+                self.model_name = f"PyTorch Checkpoint [{final_device}]"
                 logger.info("Loaded %s via raw torch.load", self.model_name)
 
             logger.info("Load total — %.2fs", time.perf_counter() - t_total)

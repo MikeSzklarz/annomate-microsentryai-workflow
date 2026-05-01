@@ -28,9 +28,10 @@ class RightPanel(QWidget):
     prev_requested               = Signal()
     next_requested               = Signal()
     annotation_selected          = Signal(int)
-    load_model_requested         = Signal()
-    microsentry_settings_changed = Signal()
-    accept_polygons_requested    = Signal()
+    load_model_requested          = Signal()
+    load_previous_model_requested = Signal()
+    microsentry_settings_changed  = Signal()
+    accept_polygons_requested     = Signal()
 
     def __init__(self, dataset_model, inference_model=None, parent: QWidget = None) -> None:
         super().__init__(parent)
@@ -52,6 +53,7 @@ class RightPanel(QWidget):
         ms_sec.setVisible(False)
         self._ms_section = MicrosentrySection()
         self._ms_section.load_model_requested.connect(self.load_model_requested)
+        self._ms_section.load_previous_model_requested.connect(self.load_previous_model_requested)
         self._ms_section.settings_changed.connect(self.microsentry_settings_changed)
         self._ms_section.accept_polygons_requested.connect(self.accept_polygons_requested)
         ms_sec.body_layout().addWidget(self._ms_section)
@@ -105,8 +107,8 @@ class RightPanel(QWidget):
     # Microsentry pass-throughs
     # ------------------------------------------------------------------ #
 
-    def set_model_loaded(self, name: str) -> None:
-        self._ms_section.set_model_loaded(name)
+    def set_model_loaded(self, name: str, path: str = "") -> None:
+        self._ms_section.set_model_loaded(name, path)
 
     def set_no_model(self) -> None:
         self._ms_section.set_no_model()

@@ -13,6 +13,8 @@ Layout (when model loaded):
       Heatmap Minimum slider
 """
 
+import os
+
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSlider, QToolButton,
@@ -45,9 +47,10 @@ class MicrosentrySection(QWidget):
         accept_polygons_requested (): Accept AI Polygons button clicked.
     """
 
-    load_model_requested    = Signal()
-    settings_changed        = Signal()
-    accept_polygons_requested = Signal()
+    load_model_requested          = Signal()
+    load_previous_model_requested = Signal()
+    settings_changed              = Signal()
+    accept_polygons_requested     = Signal()
 
     def __init__(self, parent: QWidget = None) -> None:
         super().__init__(parent)
@@ -62,10 +65,19 @@ class MicrosentrySection(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        # Load Model button (always visible)
-        self._btn_load = QPushButton("Load Model")
-        self._btn_load.clicked.connect(self.load_model_requested)
-        layout.addWidget(self._btn_load)
+        # Load buttons row (always visible)
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(4)
+        self._btn_load_prev = QPushButton("Load Previous")
+        self._btn_load_prev.setToolTip("Reload the model saved with this project")
+        self._btn_load_prev.clicked.connect(self.load_previous_model_requested)
+        self._btn_load_new = QPushButton("Load New")
+        self._btn_load_new.setToolTip("Browse for a new .pt model file")
+        self._btn_load_new.clicked.connect(self.load_model_requested)
+        btn_row.addWidget(self._btn_load_prev)
+        btn_row.addWidget(self._btn_load_new)
+        layout.addLayout(btn_row)
 
         # No-model label
         self._lbl_no_model = QLabel("No model loaded")
@@ -77,12 +89,21 @@ class MicrosentrySection(QWidget):
         self._loaded_widget = QWidget()
         lw = QVBoxLayout(self._loaded_widget)
         lw.setContentsMargins(0, 0, 0, 0)
-        lw.setSpacing(6)
+        lw.setSpacing(2)
 
-        self._lbl_model_name = QLabel("")
-        self._lbl_model_name.setStyleSheet("font-size: 11px; font-weight: bold;")
-        self._lbl_model_name.setWordWrap(True)
-        lw.addWidget(self._lbl_model_name)
+        model_info_row = QHBoxLayout()
+        model_info_row.setContentsMargins(0, 0, 0, 0)
+        model_info_row.setSpacing(6)
+        self._lbl_model_file = QLabel("")
+        self._lbl_model_file.setStyleSheet("font-size: 11px; font-weight: bold;")
+        self._lbl_model_backend = QLabel("")
+        self._lbl_model_backend.setStyleSheet("font-size: 10px; color: grey;")
+        self._lbl_model_backend.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        model_info_row.addWidget(self._lbl_model_file)
+        model_info_row.addWidget(self._lbl_model_backend, stretch=1)
+        lw.addLayout(model_info_row)
+
+        lw.addSpacing(4)
 
         # Heatmap toggle + transparency slider inline
         self._btn_heatmap = QToolButton()
@@ -211,12 +232,16 @@ class MicrosentrySection(QWidget):
     # Public API
     # ------------------------------------------------------------------ #
 
-    def set_model_loaded(self, name: str) -> None:
-        self._lbl_model_name.setText(name)
+    def set_model_loaded(self, name: str, path: str = "") -> None:
+        filename = os.path.basename(path) if path else name
+        self._lbl_model_file.setText(filename)
+        self._lbl_model_backend.setText(name)
         self._lbl_no_model.setVisible(False)
         self._loaded_widget.setVisible(True)
 
     def set_no_model(self) -> None:
+        self._lbl_model_file.setText("")
+        self._lbl_model_backend.setText("")
         self._lbl_no_model.setVisible(True)
         self._loaded_widget.setVisible(False)
 

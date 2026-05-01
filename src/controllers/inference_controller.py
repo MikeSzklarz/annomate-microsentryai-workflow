@@ -142,12 +142,13 @@ class InferenceController(QObject):
     # Model management
     # ------------------------------------------------------------------ #
 
-    def load_model(self, model_path: str, device: str) -> str:
+    def load_model(self, model_path: str, device: str = "auto") -> str:
         """Load a ``.pt`` or ``.ckpt`` model file and prepare the strategy.
 
         Args:
             model_path (str): Absolute path to the model checkpoint file.
-            device (str): Target device string (e.g. ``"cpu"``, ``"cuda"``).
+            device (str): Target device — ``"auto"`` (default) detects CUDA →
+                MPS → CPU in that order; or pass ``"cpu"``/``"cuda"``/``"mps"``.
 
         Returns:
             str: The loaded model's name as reported by the strategy.
@@ -165,11 +166,11 @@ class InferenceController(QObject):
         strategy.load_from_file(model_path)   # raises on failure
         self._strategy = strategy
         self._model_path = model_path
-        logger.info("Model loaded: %s", strategy.model_name)
+        logger.info("Model loaded: %s on %s", strategy.model_name, model_path)
         return strategy.model_name
 
     def get_model_name(self) -> str:
-        """Return the name of the currently loaded model, or empty string."""
+        """Return the backend/device label of the loaded model, or empty string."""
         return self._strategy.model_name if self._strategy else ""
 
     def get_model_path(self) -> str:
