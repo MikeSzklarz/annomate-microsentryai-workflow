@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel,
-    QScrollArea, QToolButton,
+    QScrollArea, QSizePolicy, QToolButton,
 )
 
 from ._shared import _dot, _COLOR_REVIEWED, _COLOR_IN_REVIEW
@@ -227,7 +227,7 @@ class DataNavigatorSection(QWidget):
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setMinimumHeight(80)
-        self._scroll.setMaximumHeight(320)
+        self._scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._scroll.setVisible(False)
 
         self._rows_container = QWidget()

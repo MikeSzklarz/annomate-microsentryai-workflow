@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea
+from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QScrollArea, QSplitter, QSizePolicy
 
 from views.wip.sections import (
     _CollapsibleSection,
@@ -35,20 +35,14 @@ class RightPanel(QWidget):
 
     def __init__(self, dataset_model, inference_model=None, parent: QWidget = None) -> None:
         super().__init__(parent)
+        # Left border separating the panel from the canvas
+        self.setStyleSheet("RightPanel { border-left: 1px solid palette(mid); }")
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        content = QWidget()
-        cl = QVBoxLayout(content)
-        cl.setContentsMargins(0, 0, 0, 0)
-        cl.setSpacing(0)
-
-        # Microsentry section — hidden until Enable Microsentry is toggled on
+        # Microsentry — sits above the splitter, hidden until toggled on
         ms_sec = _CollapsibleSection("Microsentry")
         ms_sec.setVisible(False)
         self._ms_section = MicrosentrySection()
@@ -57,17 +51,42 @@ class RightPanel(QWidget):
         self._ms_section.settings_changed.connect(self.microsentry_settings_changed)
         self._ms_section.accept_polygons_requested.connect(self.accept_polygons_requested)
         ms_sec.body_layout().addWidget(self._ms_section)
-        cl.addWidget(ms_sec)
+        outer.addWidget(ms_sec)
         self._ms_collapsible = ms_sec
 
-        nav_sec = _CollapsibleSection("Dataset Navigator")
+        # Splitter: Dataset Navigator (top, resizable) | rest (bottom, scrollable)
+        splitter = QSplitter(Qt.Vertical)
+        splitter.setHandleWidth(6)
+        splitter.setChildrenCollapsible(False)
+
+        nav_sec = _CollapsibleSection("Dataset Navigator", expandable=True)
         self.navigator = DataNavigatorSection(dataset_model, inference_model)
         self.navigator.image_selected.connect(self.image_selected)
         self.navigator.prev_requested.connect(self.prev_requested)
         self.navigator.next_requested.connect(self.next_requested)
         nav_sec.body_layout().addWidget(self.navigator)
-        cl.addWidget(nav_sec)
-        
+
+        nav_frame = QFrame()
+        nav_frame.setFrameShape(QFrame.StyledPanel)
+        nav_frame.setFrameShadow(QFrame.Sunken)
+        nav_frame.setMinimumHeight(60)
+        nav_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        nav_fl = QVBoxLayout(nav_frame)
+        nav_fl.setContentsMargins(0, 0, 0, 0)
+        nav_fl.setSpacing(0)
+        nav_fl.addWidget(nav_sec)
+        splitter.addWidget(nav_frame)
+
+        bottom_scroll = QScrollArea()
+        bottom_scroll.setWidgetResizable(True)
+        bottom_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        bottom_scroll.setFrameShape(QFrame.StyledPanel)
+        bottom_scroll.setFrameShadow(QFrame.Sunken)
+        bottom_content = QWidget()
+        cl = QVBoxLayout(bottom_content)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(0)
+
         classes_sec = _CollapsibleSection("Annotation Classes")
         self.classes = ClassesSection(dataset_model)
         self.classes.class_selected.connect(self.class_selected)
@@ -86,8 +105,21 @@ class RightPanel(QWidget):
         cl.addWidget(meta_sec)
 
         cl.addStretch()
-        scroll.setWidget(content)
-        outer.addWidget(scroll)
+        bottom_scroll.setWidget(bottom_content)
+        splitter.addWidget(bottom_scroll)
+
+        self._splitter = splitter
+        self._dataset_model = dataset_model
+        splitter.setSizes([20, 560])
+        outer.addWidget(splitter, stretch=1)
+
+        dataset_model.modelReset.connect(self._on_model_reset)
+
+    def _on_model_reset(self) -> None:
+        if self._dataset_model.rowCount() > 0:
+            self._splitter.setSizes([220, 400])
+        else:
+            self._splitter.setSizes([20, 560])
 
     def select_row(self, row: int) -> None:
         """Silently highlight *row* in the navigator list."""

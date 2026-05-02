@@ -4,11 +4,18 @@ from PySide6.QtWidgets import (
 
 
 class _CollapsibleSection(QWidget):
-    """Bold toggle-header + separator + collapsible body."""
+    """Bold toggle-header + separator + collapsible body.
 
-    def __init__(self, title: str, parent: QWidget = None) -> None:
+    Args:
+        expandable: When True, the section uses an Expanding vertical size
+            policy so it can grow inside a QSplitter. Default is Maximum
+            (shrinks to content height).
+    """
+
+    def __init__(self, title: str, parent: QWidget = None, expandable: bool = False) -> None:
         super().__init__(parent)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        v_policy = QSizePolicy.Expanding if expandable else QSizePolicy.Maximum
+        self.setSizePolicy(QSizePolicy.Expanding, v_policy)
         self._title = title
         self._expanded = True
 
@@ -31,10 +38,12 @@ class _CollapsibleSection(QWidget):
         root.addWidget(sep)
 
         self._body = QWidget()
+        if expandable:
+            self._body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._body_layout = QVBoxLayout(self._body)
         self._body_layout.setContentsMargins(8, 6, 8, 8)
         self._body_layout.setSpacing(4)
-        root.addWidget(self._body)
+        root.addWidget(self._body, stretch=1 if expandable else 0)
 
     def body_layout(self) -> QVBoxLayout:
         return self._body_layout

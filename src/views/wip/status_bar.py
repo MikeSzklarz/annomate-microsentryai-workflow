@@ -57,13 +57,11 @@ class WIPStatusBar(QWidget):
         self._progress_ai.setFixedWidth(160)
         self._progress_ai.setMaximumHeight(16)
         self._progress_ai.setTextVisible(True)
-        self._progress_ai.setFormat("AI: %v / %m")
+        self._progress_ai.setFormat("Microsentry: %v / %m")
         self._progress_ai.setVisible(False)
         h.addWidget(self._progress_ai)
         h.addSpacing(6)
 
-        self._lbl_task = QLabel("Ready")
-        h.addWidget(self._lbl_task)
 
         root.addWidget(bar)
 
@@ -89,13 +87,10 @@ class WIPStatusBar(QWidget):
     def set_model_loading(self, loading: bool) -> None:
         self._lbl_loading.setVisible(loading)
 
-    def set_task_status(self, msg: str) -> None:
-        self._lbl_task.setText(msg)
-
     def set_inference_progress(self, done: int, total: int) -> None:
         self._progress_ai.setMaximum(total)
         self._progress_ai.setValue(done)
         self._progress_ai.setVisible(True)
 
     def clear_inference_progress(self) -> None:
-        self._progress_ai.setVisible(False)
+        pass  # bar stays visible so the user can see all images were processed
