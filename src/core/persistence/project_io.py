@@ -125,6 +125,11 @@ class ProjectIO:
                 "eval_out_path": validation_state.eval_out_path,
             },
             "review_status": review_status,
+            "review_decisions": {
+                fname: dataset_state.review_decisions[fname]
+                for fname in dataset_state.image_files
+                if fname in dataset_state.review_decisions
+            },
             "inference": {
                 "score_cache": dict(inference_state.inference_cache),
                 "score_maps_file": score_maps_file,
@@ -226,6 +231,10 @@ class ProjectIO:
         for fname, info in project_data.get("review_status", {}).items():
             dataset_state.inspectors[fname] = info.get("inspector", "")
             dataset_state.notes[fname] = info.get("note", "")
+
+        # Image-level review decisions
+        for fname, decision in project_data.get("review_decisions", {}).items():
+            dataset_state.review_decisions[fname] = decision
 
         # Validation paths
         vdata = project_data.get("validation", {})

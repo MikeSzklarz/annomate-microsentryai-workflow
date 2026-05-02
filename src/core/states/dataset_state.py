@@ -28,9 +28,10 @@ class DatasetState:
         self.image_files = []
 
         # Annotations & Metadata
-        self.annotations = {}   # { "img.jpg": [ { "category_name": str, "polygon": [...] } ] }
-        self.inspectors = {}    # { "img.jpg": "John Doe" }
-        self.notes = {}         # { "img.jpg": "Needs review" }
+        self.annotations = {}       # { "img.jpg": [ { "category_name": str, "polygon": [...] } ] }
+        self.inspectors = {}        # { "img.jpg": "John Doe" }
+        self.notes = {}             # { "img.jpg": "Needs review" }
+        self.review_decisions = {}  # { "img.jpg": "accept" | "reject" }
 
         # Class registry — initialized from defaults, NOT cleared on folder load
         self.class_names = list(DEFAULT_CLASSES.keys())
@@ -43,6 +44,7 @@ class DatasetState:
         self.annotations.clear()
         self.inspectors.clear()
         self.notes.clear()
+        self.review_decisions.clear()
 
     def is_reviewed(self, img_name: str) -> bool:
         """Return whether an image has at least one annotation or metadata entry.
@@ -56,7 +58,8 @@ class DatasetState:
         """
         has_anno = bool(self.annotations.get(img_name))
         has_meta = bool(self.inspectors.get(img_name) or self.notes.get(img_name))
-        return has_anno or has_meta
+        has_decision = img_name in self.review_decisions
+        return has_anno or has_meta or has_decision
 
     # --- Annotation CRUD ---
 
@@ -153,3 +156,19 @@ class DatasetState:
             value (str): Note content to store.
         """
         self.notes[image_name] = value
+
+    def set_review_decision(self, image_name: str, decision) -> None:
+        """Set the image-level review decision.
+
+        Args:
+            image_name (str): Target image filename.
+            decision (str | None): ``"accept"``, ``"reject"``, or ``None`` to clear.
+        """
+        if decision is None:
+            self.review_decisions.pop(image_name, None)
+        else:
+            self.review_decisions[image_name] = decision
+
+    def get_review_decision(self, image_name: str):
+        """Return the image-level review decision, or None if not set."""
+        return self.review_decisions.get(image_name)

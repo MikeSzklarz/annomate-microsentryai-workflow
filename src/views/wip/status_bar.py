@@ -6,7 +6,7 @@ task/ready indicator. No custom colors — system palette only.
 """
 
 from PySide6.QtWidgets import (
-    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy,
+    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QSizePolicy,
 )
 
 
@@ -48,9 +48,19 @@ class WIPStatusBar(QWidget):
 
         h.addStretch()
 
-        self._lbl_ai = QLabel("")
-        self._lbl_ai.setVisible(False)
-        h.addWidget(self._lbl_ai)
+        self._lbl_loading = QLabel("Loading model…")
+        self._lbl_loading.setVisible(False)
+        h.addWidget(self._lbl_loading)
+        h.addSpacing(6)
+
+        self._progress_ai = QProgressBar()
+        self._progress_ai.setFixedWidth(160)
+        self._progress_ai.setMaximumHeight(16)
+        self._progress_ai.setTextVisible(True)
+        self._progress_ai.setFormat("AI: %v / %m")
+        self._progress_ai.setVisible(False)
+        h.addWidget(self._progress_ai)
+        h.addSpacing(6)
 
         self._lbl_task = QLabel("Ready")
         h.addWidget(self._lbl_task)
@@ -76,12 +86,16 @@ class WIPStatusBar(QWidget):
     def set_tool(self, name: str) -> None:
         self._lbl_tool.setText(f"Tool: {name.capitalize() if name else 'None'}")
 
+    def set_model_loading(self, loading: bool) -> None:
+        self._lbl_loading.setVisible(loading)
+
     def set_task_status(self, msg: str) -> None:
         self._lbl_task.setText(msg)
 
     def set_inference_progress(self, done: int, total: int) -> None:
-        self._lbl_ai.setText(f"AI: {done}/{total}  |  ")
-        self._lbl_ai.setVisible(True)
+        self._progress_ai.setMaximum(total)
+        self._progress_ai.setValue(done)
+        self._progress_ai.setVisible(True)
 
     def clear_inference_progress(self) -> None:
-        self._lbl_ai.setVisible(False)
+        self._progress_ai.setVisible(False)

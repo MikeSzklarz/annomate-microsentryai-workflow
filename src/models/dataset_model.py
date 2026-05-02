@@ -413,6 +413,38 @@ class DatasetTableModel(QAbstractTableModel):
             return False
         return self.state.is_reviewed(self.state.image_files[row])
 
+    def set_review_decision(self, row: int, decision) -> None:
+        """Set the image-level review decision for the image at *row*.
+
+        Args:
+            row (int): Zero-based row index of the target image.
+            decision (str | None): ``"accept"``, ``"reject"``, or ``None`` to clear.
+        """
+        if not (0 <= row < self.rowCount()):
+            return
+        self.state.set_review_decision(self.state.image_files[row], decision)
+        self._emit_row(row)
+
+    def get_review_decision(self, row: int):
+        """Return the image-level review decision for the image at *row*, or None.
+
+        Args:
+            row (int): Zero-based row index of the target image.
+        """
+        if not (0 <= row < self.rowCount()):
+            return None
+        return self.state.get_review_decision(self.state.image_files[row])
+
+    def get_annotation_count(self, row: int) -> int:
+        """Return the number of polygon annotations for the image at *row*.
+
+        Args:
+            row (int): Zero-based row index of the target image.
+        """
+        if not (0 <= row < self.rowCount()):
+            return 0
+        return len(self.state.annotations.get(self.state.image_files[row], []))
+
     def get_image_filename(self, row: int) -> str:
         """Return the raw filename (basename) for the image at *row*.
 

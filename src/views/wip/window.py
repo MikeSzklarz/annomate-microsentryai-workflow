@@ -18,7 +18,8 @@ from PySide6.QtCore import Qt, QEvent, QPointF, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QSizePolicy,
-    QSplitter, QToolButton, QFileDialog, QMessageBox, QHBoxLayout, QComboBox
+    QSplitter, QToolButton, QFileDialog, QMessageBox, QHBoxLayout, QComboBox,
+    QApplication,
 )
 
 from views.annomate.image_label import ImageLabel
@@ -81,6 +82,80 @@ class _AIAcceptPopup(QFrame):
         self.move(x, y)
         self.setVisible(True)
         self.raise_()
+
+
+class _ReviewBar(QFrame):
+    """Floating Accept/Reject bar positioned at the top-right of the canvas.
+
+    Emits decision_changed("accept"), decision_changed("reject"), or
+    decision_changed(None) when the user toggles a button.
+    """
+
+    decision_changed = Signal(object)
+
+    _MARGIN = 10
+    _BTN_H = 28
+
+    def __init__(self, canvas: QWidget, parent: QWidget = None) -> None:
+        super().__init__(parent)
+        self._canvas = canvas
+        self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        self.setAutoFillBackground(True)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(6)
+
+        self._btn_accept = QToolButton()
+        self._btn_accept.setText("✓ Accept")
+        self._btn_accept.setToolTip("Mark this image as accepted")
+        self._btn_accept.setCheckable(True)
+        self._btn_accept.setFixedHeight(self._BTN_H)
+        self._btn_accept.clicked.connect(lambda checked: self._on_clicked("accept", checked))
+        layout.addWidget(self._btn_accept)
+
+        self._btn_reject = QToolButton()
+        self._btn_reject.setText("✗ Reject")
+        self._btn_reject.setToolTip("Mark this image as rejected")
+        self._btn_reject.setCheckable(True)
+        self._btn_reject.setFixedHeight(self._BTN_H)
+        self._btn_reject.clicked.connect(lambda checked: self._on_clicked("reject", checked))
+        layout.addWidget(self._btn_reject)
+
+        self.adjustSize()
+        self.setVisible(False)
+
+    def _on_clicked(self, which: str, checked: bool) -> None:
+        if checked:
+            other = self._btn_reject if which == "accept" else self._btn_accept
+            other.setChecked(False)
+            self._update_styles()
+            self.decision_changed.emit(which)
+        else:
+            self._update_styles()
+            self.decision_changed.emit(None)
+
+    def set_decision(self, decision) -> None:
+        """Silently update button states to reflect *decision* without emitting."""
+        self._btn_accept.blockSignals(True)
+        self._btn_reject.blockSignals(True)
+        self._btn_accept.setChecked(decision == "accept")
+        self._btn_reject.setChecked(decision == "reject")
+        self._btn_accept.blockSignals(False)
+        self._btn_reject.blockSignals(False)
+        self._update_styles()
+
+    def _update_styles(self) -> None:
+        self._btn_accept.setStyleSheet(
+            "background-color: #4caf50; color: white;" if self._btn_accept.isChecked() else ""
+        )
+        self._btn_reject.setStyleSheet(
+            "background-color: #f44336; color: white;" if self._btn_reject.isChecked() else ""
+        )
+
+    def reposition(self, canvas_size) -> None:
+        x = canvas_size.width() - self.width() - self._MARGIN
+        self.move(max(0, x), self._MARGIN)
 
 
 class _ZoomToolbar(QFrame):
@@ -232,6 +307,10 @@ class WIPWindow(QWidget):
         self._zoom_toolbar = _ZoomToolbar(self.canvas, self.canvas)
         self._zoom_toolbar.raise_()
 
+        self._review_bar = _ReviewBar(self.canvas, self.canvas)
+        self._review_bar.decision_changed.connect(self._on_review_decision)
+        self._review_bar.raise_()
+
         self._ai_popup = _AIAcceptPopup(self.canvas, self.canvas)
         self._ai_popup.accepted.connect(self._on_accept_single_ai)
 
@@ -253,10 +332,12 @@ class WIPWindow(QWidget):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._zoom_toolbar.reposition(self.canvas.size())
+        self._review_bar.reposition(self.canvas.size())
 
     def eventFilter(self, obj, event) -> bool:
         if obj is self.canvas and event.type() == QEvent.Resize:
             self._zoom_toolbar.reposition(event.size())
+            self._review_bar.reposition(event.size())
         return super().eventFilter(obj, event)
 
     # ------------------------------------------------------------------ #
@@ -268,6 +349,7 @@ class WIPWindow(QWidget):
             self._load_row(0)
         else:
             self._current_row = -1
+            self._review_bar.setVisible(False)
 
     def _load_row(self, row: int) -> None:
         bgr = self.io_controller.load_image_for_display(row)
@@ -275,6 +357,9 @@ class WIPWindow(QWidget):
             return
         self._current_bgr = bgr
         self._current_row = row
+        self._review_bar.set_decision(self.dataset_model.get_review_decision(row))
+        self._review_bar.setVisible(True)
+        self._review_bar.reposition(self.canvas.size())
         self._ai_popup.setVisible(False)
         self._selected_ai_idx = -1
         self.canvas.set_image(bgr)      # always set the original; resets zoom (expected on new image)
@@ -331,8 +416,12 @@ class WIPWindow(QWidget):
             return
         self.dataset_model.update_annotation_points(self._current_row, idx, pts)
 
-    def _on_dataset_data_changed(self, *_) -> None:
+    def _on_dataset_data_changed(self, top_left, bottom_right, *_) -> None:
         if self._current_row >= 0:
+            if top_left.row() <= self._current_row <= bottom_right.row():
+                self._review_bar.set_decision(
+                    self.dataset_model.get_review_decision(self._current_row)
+                )
             self._refresh_canvas_render()
 
     def _on_canvas_polygon_selected(self, idx: int) -> None:
@@ -350,6 +439,9 @@ class WIPWindow(QWidget):
             
         # Trigger the normal selection logic (updates canvas & slider)
         self._on_annotation_selected(idx)
+    def _on_review_decision(self, decision) -> None:
+        if self._current_row >= 0:
+            self.dataset_model.set_review_decision(self._current_row, decision)
 
     def _on_annotation_selected(self, idx: int) -> None:
         """Apply selection to the canvas and sync the UI slider to match the polygon's thickness."""
@@ -457,11 +549,19 @@ class WIPWindow(QWidget):
         self._load_model_from_path(path)
 
     def _load_model_from_path(self, path: str) -> None:
+        self.status_bar.set_model_loading(True)
+        QApplication.processEvents()
         try:
             name = self.inference_controller.load_model(path)
         except Exception as exc:
+            self.status_bar.set_model_loading(False)
             QMessageBox.critical(self, "Load Model", f"Could not load model:\n{exc}")
             return
+        self.status_bar.set_model_loading(False)
+        # Clear score maps from any previous model so the new model re-processes
+        # everything rather than reusing stale heatmaps.
+        self.inference_model.clear()
+        self._refresh_canvas_render()
         self.right_panel.set_model_loaded(name, path)
         self._start_pending_inference()
 
@@ -522,7 +622,7 @@ class WIPWindow(QWidget):
         # Annotation overlays are always shown
         annos = self.dataset_model.get_annotations(self._current_row)
         anno_overlays = [
-            (a["polygon"], QColor(*self.dataset_model.get_class_color(a["category_name"])))
+            (a["polygon"], QColor(*self.dataset_model.get_class_color(a["category_name"])), a.get("thickness", 2.0))
             for a in annos
         ]
 
@@ -596,7 +696,7 @@ class WIPWindow(QWidget):
             return
         annos = self.dataset_model.get_annotations(self._current_row)
         anno_overlays = [
-            (a["polygon"], QColor(*self.dataset_model.get_class_color(a["category_name"])))
+            (a["polygon"], QColor(*self.dataset_model.get_class_color(a["category_name"])), a.get("thickness", 2.0))
             for a in annos
         ]
         self._update_canvas_overlays(anno_overlays)
