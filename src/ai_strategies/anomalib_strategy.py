@@ -238,6 +238,51 @@ class AnomalibStrategy:
         self.device = device_code.lower()
         logger.info("Target device set to: %s", self.device)
 
+    def _log_hardware_environment(self) -> None:
+        """Log a full hardware availability report to help diagnose device selection."""
+        logger.info("── Hardware Environment ─────────────────────────────────")
+        logger.info("  Platform   : %s %s", platform.system(), platform.release())
+        logger.info("  Python     : %s", platform.python_version())
+        logger.info("  PyTorch    : %s", torch.__version__)
+
+        # CUDA
+        cuda_available = torch.cuda.is_available()
+        logger.info("  CUDA       : %s", "available" if cuda_available else "not available")
+        if cuda_available:
+            logger.info("    CUDA toolkit : %s", torch.version.cuda)
+            device_count = torch.cuda.device_count()
+            logger.info("    GPU count    : %d", device_count)
+            for i in range(device_count):
+                name = torch.cuda.get_device_name(i)
+                props = torch.cuda.get_device_properties(i)
+                vram_gb = props.total_memory / (1024 ** 3)
+                logger.info("    GPU %d        : %s (%.1f GB VRAM)", i, name, vram_gb)
+        else:
+            if not torch.cuda.is_available():
+                # Distinguish: no NVIDIA driver vs CUDA build missing
+                cuda_built = torch.version.cuda is not None
+                if cuda_built:
+                    logger.info("    (PyTorch was built with CUDA %s but no NVIDIA GPU/driver found)", torch.version.cuda)
+                else:
+                    logger.info("    (PyTorch was not built with CUDA support)")
+
+        # MPS
+        mps_built = hasattr(torch.backends, "mps")
+        if mps_built:
+            mps_available = torch.backends.mps.is_available()
+            logger.info("  MPS        : %s", "available" if mps_available else "not available")
+            if not mps_available:
+                mps_built_flag = torch.backends.mps.is_built()
+                if not mps_built_flag:
+                    logger.info("    (PyTorch was not built with MPS support)")
+                else:
+                    logger.info("    (MPS built but not available — requires macOS 12.3+ with Apple GPU)")
+        else:
+            logger.info("  MPS        : not available (PyTorch < 1.12 — no MPS backend)")
+
+        logger.info("  CPU        : always available (%d logical cores)", os.cpu_count() or 0)
+        logger.info("─────────────────────────────────────────────────────────")
+
     def _resolve_device(self) -> str:
         """Resolve the effective compute device, applying auto-detection if needed.
 
@@ -246,12 +291,19 @@ class AnomalibStrategy:
                 ``"cpu"`` when :attr:`device` is ``"auto"``; otherwise
                 returns :attr:`device` unchanged.
         """
+        self._log_hardware_environment()
+
         if self.device != "auto":
+            logger.info("Device selection: using explicitly requested device '%s'", self.device)
             return self.device
+
         if torch.cuda.is_available():
+            logger.info("Device selection: auto → CUDA (NVIDIA GPU detected)")
             return "cuda"
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            logger.info("Device selection: auto → MPS (Apple GPU detected, CUDA not available)")
             return "mps"
+        logger.info("Device selection: auto → CPU (no GPU acceleration available)")
         return "cpu"
 
     def load_from_folder(self, folder_path: str) -> None:
