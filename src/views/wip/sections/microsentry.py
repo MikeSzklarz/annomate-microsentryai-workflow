@@ -188,14 +188,14 @@ class MicrosentrySection(QWidget):
         )
         aw.addWidget(_slider_row("Smoothing", self._sigma_val, self._sigma))
 
-        self._epsilon_val = QLabel("1.5")
+        self._epsilon_val = QLabel("12")
         self._epsilon_val.setStyleSheet("font-size: 11px;")
         self._epsilon_val.setFixedWidth(30)
         self._epsilon = QSlider(Qt.Horizontal)
-        self._epsilon.setRange(0, 40)
-        self._epsilon.setValue(3)
+        self._epsilon.setRange(0, 20)
+        self._epsilon.setValue(12)
         self._epsilon.valueChanged.connect(
-            lambda v: (self._epsilon_val.setText(f"{v * 0.5:.1f}"), self._debounce.start())
+            lambda v: (self._epsilon_val.setText(str(v)), self._debounce.start())
         )
         aw.addWidget(_slider_row("Simplify Tolerance", self._epsilon_val, self._epsilon))
 
@@ -252,6 +252,6 @@ class MicrosentrySection(QWidget):
             "seg_pct":         self._thresh.value(),
             "alpha":           self._alpha.value() / 100.0,
             "sigma":           self._sigma.value(),
-            "epsilon":         self._epsilon.value() * 0.5,
+            "epsilon":         self._epsilon.value(),
             "heat_min":        self._heat_min.value(),
         }
