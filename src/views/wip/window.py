@@ -162,6 +162,7 @@ class WIPWindow(QWidget):
         self.canvas.polygonFinished.connect(self._on_polygon_finished)
         self.canvas.polygonEdited.connect(self._on_polygon_edited)
         self.canvas.toolCanceled.connect(self._on_tool_canceled)
+        self.canvas.polygonSelected.connect(self._on_canvas_polygon_selected)
         self.canvas.ai_polygon_clicked.connect(self._on_ai_polygon_clicked)
 
         # Canvas → status bar (live feedback)
@@ -183,6 +184,9 @@ class WIPWindow(QWidget):
 
         # Tool palette
         self.tool_palette.tool_selected.connect(self._on_tool_selected)
+
+        # Route thickness signal directly to canvas setter
+        self.tool_palette.thickness_changed.connect(self._on_thickness_changed)
 
         # Inference controller signals
         if self.inference_controller is not None:
@@ -317,7 +321,7 @@ class WIPWindow(QWidget):
         if not class_names:
             return
         target = self._active_class if self._active_class in class_names else class_names[0]
-        self.dataset_model.add_annotation(self._current_row, target, pts)
+        self.dataset_model.add_annotation(self._current_row, target, pts, self.canvas._line_thickness)
         self._refresh_canvas_render()
 
     def _on_polygon_edited(self, idx: int, pts: list) -> None:
@@ -329,25 +333,72 @@ class WIPWindow(QWidget):
         if self._current_row >= 0:
             self._refresh_canvas_render()
 
+    def _on_canvas_polygon_selected(self, idx: int) -> None:
+        """Sync the right panel list and slider when a polygon is clicked on the canvas."""
+        ann_section = self.right_panel.annotations
+        
+        # Safely deselect the old item in the list
+        if 0 <= ann_section._selected_idx < len(ann_section._row_widgets):
+            ann_section._row_widgets[ann_section._selected_idx].set_selected(False)
+        
+        # Select the new item in the list
+        ann_section._selected_idx = idx
+        if 0 <= idx < len(ann_section._row_widgets):
+            ann_section._row_widgets[idx].set_selected(True)
+            
+        # Trigger the normal selection logic (updates canvas & slider)
+        self._on_annotation_selected(idx)
+
     def _on_annotation_selected(self, idx: int) -> None:
+        """Apply selection to the canvas and sync the UI slider to match the polygon's thickness."""
         self.canvas.selected_polygon_idx = idx
         self.canvas.update()
+        
+        # Read the polygon's specific thickness and update the slider
+        if idx != -1 and self._current_row >= 0:
+            annos = self.dataset_model.get_annotations(self._current_row)
+            if 0 <= idx < len(annos):
+                thick = annos[idx].get("thickness", 2.0)
+                
+                # Block signals so setting the slider doesn't accidentally trigger a drawing update
+                self.tool_palette.slider_thickness.blockSignals(True)
+                self.tool_palette.slider_thickness.setValue(int(thick * 4)) # slider is 1-40
+                self.tool_palette.lbl_thickness.setText(f"{thick:.2f} px")
+                self.tool_palette.slider_thickness.blockSignals(False)
+                
+                self.canvas.set_line_thickness(thick)
 
     def _refresh_overlays(self) -> None:
         """Rebuild canvas overlays from annotations only (no AI polygons). V4: QColor here."""
+        current_sel = self.canvas.selected_polygon_idx
         annos = self.dataset_model.get_annotations(self._current_row)
         overlays = [
-            (a["polygon"], QColor(*self.dataset_model.get_class_color(a["category_name"])))
+            (a["polygon"], QColor(*self.dataset_model.get_class_color(a["category_name"])), a.get("thickness", 2.0))
             for a in annos
         ]
         self.canvas.selected_polygon_idx = -1
         self.canvas.set_overlays(overlays)
         self.canvas.clear_ai_overlays()
+        if 0 <= current_sel < len(overlays):
+            self.canvas.selected_polygon_idx = current_sel
+        else:
+            self.canvas.selected_polygon_idx = -1
 
     def _update_canvas_overlays(self, anno_overlays: list) -> None:
         """Push annotation overlays and current AI contours to the canvas."""
         self.canvas.set_overlays(anno_overlays)
         self.canvas.set_ai_overlays(self._current_ai_contours)
+
+    def _on_thickness_changed(self, thickness: float) -> None:
+        """Apply thickness based on current tool mode."""
+        # Always update the canvas so future drawing uses this thickness
+        self.canvas.set_line_thickness(thickness)
+        
+        # If we are NOT actively drawing, and a polygon is selected, mutate its data
+        if self._active_tool != "polygon":
+            idx = self.canvas.selected_polygon_idx
+            if idx != -1 and self._current_row >= 0:
+                self.dataset_model.update_annotation_thickness(self._current_row, idx, thickness)
 
     # ------------------------------------------------------------------ #
     # Microsentry toggle & rendering

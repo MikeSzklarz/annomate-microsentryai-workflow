@@ -84,6 +84,7 @@ class ImageLabel(QLabel):
 
         self.current_tool: Optional[str] = None
         self._active_color = QColor(0, 200, 0)
+        self._line_thickness = 2.0
 
         self._orig_image_bgr: Optional[np.ndarray] = None
         self._display_qpix: Optional[QPixmap] = None
@@ -229,6 +230,14 @@ class ImageLabel(QLabel):
         """
         self._active_color = color if isinstance(color, QColor) else QColor(0, 200, 0)
 
+    def set_line_thickness(self, thickness: float) -> None:
+        """Set the line thickness for drawing polygons and overlays.
+        
+        Args: thickness (float): The brush width in pixels.
+        """
+        self._line_thickness = thickness
+        self.update()
+
     def set_overlays(self, poly_list: List[Tuple[List[Tuple[float, float]], QColor]]) -> None:
         """Replace all rendered overlay polygons.
 
@@ -241,12 +250,12 @@ class ImageLabel(QLabel):
                 ``(x, y)`` tuples in original image coordinates.
         """
         self._overlays = []
-        for pts_orig, color in poly_list:
+        for pts_orig, color, thick in poly_list:
             disp_pts = [
                 QPointF(x * self._base_scale, y * self._base_scale)
                 for (x, y) in pts_orig
             ]
-            self._overlays.append((disp_pts, color))
+            self._overlays.append((disp_pts, color, thick))
 
         n = len(self._overlays)
         if self.editing_polygon_idx >= n:
@@ -392,7 +401,7 @@ class ImageLabel(QLabel):
         if event.button() == Qt.LeftButton:
             pos_disp = self.view_to_display(QPointF(event.pos()))
             found_idx = -1
-            for i, (pts, _) in enumerate(reversed(self._overlays)):
+            for i, (pts, _, _) in enumerate(reversed(self._overlays)):
                 if QPolygonF(pts).containsPoint(pos_disp, Qt.OddEvenFill):
                     found_idx = len(self._overlays) - 1 - i
                     break
@@ -431,7 +440,7 @@ class ImageLabel(QLabel):
 
             # --- PRE-CHECK: Identify if we clicked inside any existing polygon ---
             found_idx = -1
-            for i, (pts, _) in enumerate(reversed(self._overlays)):
+            for i, (pts, _, _) in enumerate(reversed(self._overlays)):
                 if QPolygonF(pts).containsPoint(pos_disp, Qt.OddEvenFill):
                     found_idx = len(self._overlays) - 1 - i
                     break
@@ -455,7 +464,7 @@ class ImageLabel(QLabel):
 
             # 1. Edit Mode: Vertex Dragging & Polygon Dragging
             if self.editing_polygon_idx != -1:
-                pts, _ = self._overlays[self.editing_polygon_idx]
+                pts, _, _ = self._overlays[self.editing_polygon_idx]
                 closest_idx = -1
                 min_dist = float('inf')
 
@@ -517,7 +526,7 @@ class ImageLabel(QLabel):
 
         if self.dragging_vertex_idx != -1 and self.editing_polygon_idx != -1:
             new_pos = self.view_to_display(self._mouse_pos)
-            pts, _ = self._overlays[self.editing_polygon_idx]
+            pts, _, _ = self._overlays[self.editing_polygon_idx]
             pts[self.dragging_vertex_idx] = new_pos
             self.update()
             return
@@ -527,7 +536,7 @@ class ImageLabel(QLabel):
             delta_view = self._mouse_pos - self._last_mouse_pos
             delta_disp = QPointF(delta_view.x() / self._zoom, delta_view.y() / self._zoom)
 
-            pts, _ = self._overlays[self.selected_polygon_idx]
+            pts, _, _ = self._overlays[self.selected_polygon_idx]
             for i in range(len(pts)):
                 pts[i] = QPointF(pts[i].x() + delta_disp.x(), pts[i].y() + delta_disp.y())
 
@@ -555,7 +564,7 @@ class ImageLabel(QLabel):
                 self.editing_polygon_idx = -1
                 self.setCursor(Qt.ArrowCursor)
                 return
-            pts, _ = self._overlays[self.editing_polygon_idx]
+            pts, _, _ = self._overlays[self.editing_polygon_idx]
             hovering = False
             for p_disp in pts:
                 p_view = QPointF(
@@ -586,7 +595,7 @@ class ImageLabel(QLabel):
             # sees is_dragging() == False and can safely refresh overlays.
             if self.dragging_vertex_idx != -1:
                 idx = self.editing_polygon_idx
-                pts, _ = self._overlays[idx]
+                pts, _, _ = self._overlays[idx]
                 pts_orig = [self.display_to_original(p) for p in pts]
                 self.dragging_vertex_idx = -1
                 self.polygonEdited.emit(idx, pts_orig)
@@ -595,7 +604,7 @@ class ImageLabel(QLabel):
             # Commit Polygon Drag
             if self._dragging_polygon:
                 idx = self.selected_polygon_idx
-                pts, _ = self._overlays[idx]
+                pts, _, _ = self._overlays[idx]
                 pts_orig = [self.display_to_original(p) for p in pts]
                 self._dragging_polygon = False
                 self._last_mouse_pos = None
@@ -703,10 +712,10 @@ class ImageLabel(QLabel):
             painter.setOpacity(1.0)
 
         # Draw Overlays with Selection Highlighting
-        for i, (pts, color) in enumerate(self._overlays):
+        for i, (pts, color, thick) in enumerate(self._overlays):
             if len(pts) >= 2:
                 is_selected = (i == self.selected_polygon_idx)
-                pen = QPen(color, 4 if is_selected else 2) # Thicker if selected
+                pen = QPen(color, (thick * 2.0) if is_selected else thick) # Thicker if selected
                 alpha = 150 if is_selected else 60         # Darker fill if selected
 
                 painter.setPen(pen)
@@ -735,7 +744,7 @@ class ImageLabel(QLabel):
 
         if self.current_tool == POLYGON and self.current_polygon_points:
             painter.setBrush(Qt.NoBrush)
-            painter.setPen(QPen(self._active_color, 2))
+            painter.setPen(QPen(self._active_color, self._line_thickness))
             painter.drawPolyline(QPolygonF(self.current_polygon_points))
 
             if self._mouse_pos:

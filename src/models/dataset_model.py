@@ -137,7 +137,7 @@ class DatasetTableModel(QAbstractTableModel):
         self.state.image_files = files
         self.endResetModel()
 
-    def add_annotation(self, row: int, category: str, polygon: list) -> None:
+    def add_annotation(self, row: int, category: str, polygon: list, thickness: float = 2.0) -> None:
         """Append a polygon annotation to the image at *row*.
 
         Out-of-bounds *row* values are logged as errors and silently ignored.
@@ -148,6 +148,7 @@ class DatasetTableModel(QAbstractTableModel):
             category (str): Class name to assign to the annotation.
             polygon (list): Sequence of ``(x, y)`` coordinate pairs defining
                 the polygon boundary.
+            thickness (float): Line thickness for the annotation (default: 2.0).
         """
         if not (0 <= row < self.rowCount()):
             logger.error("Failed to add annotation: Row %d is out of bounds.", row)
@@ -156,7 +157,14 @@ class DatasetTableModel(QAbstractTableModel):
         filename = self.state.image_files[row]
         logger.debug("Adding '%s' annotation to '%s' (%d points)", category, filename, len(polygon))
 
-        self.state.add_annotation(filename, category, polygon)
+        self.state.add_annotation(filename, category, polygon, thickness)
+        self._emit_row(row)
+
+    def update_annotation_thickness(self, row: int, annotation_idx: int, thickness: float) -> None:
+        """Update the line thickness of an existing annotation."""
+        if not (0 <= row < self.rowCount()):
+            return
+        self.state.update_annotation_thickness(self.state.image_files[row], annotation_idx, thickness)
         self._emit_row(row)
 
     def delete_annotation(self, row: int, annotation_idx: int) -> None:

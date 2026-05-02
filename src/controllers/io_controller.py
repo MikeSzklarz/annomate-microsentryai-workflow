@@ -135,6 +135,7 @@ class IOController:
                     {
                         "class": a["category_name"],
                         "polygon": [(float(x), float(y)) for (x, y) in a["polygon"]],
+                        "thickness": a.get("thickness", 2.0),
                     }
                     for a in anns
                 ],
@@ -289,7 +290,7 @@ class IOController:
             state.inspectors[name] = info.get("inspector", "")
             state.notes[name] = info.get("note", "")
             recs = [
-                {"category_name": a.get("class", ""), "polygon": a.get("polygon", [])}
+                {"category_name": a.get("class", ""), "polygon": a.get("polygon", []), "thickness": a.get("thickness", 2.0)}
                 for a in info.get("annotations", [])
             ]
             if recs:

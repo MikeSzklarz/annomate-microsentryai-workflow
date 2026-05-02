@@ -403,7 +403,7 @@ class ImageAnnotator(QMainWindow):
         current_class = self.class_combo.currentText()
         if not current_class:
             return
-        self.model.add_annotation(sel.currentIndex().row(), current_class, points)
+        self.model.add_annotation(sel.currentIndex().row(), current_class, points, self.canvas._line_thickness)
 
     def update_polygon_points(self, idx: int, points: list) -> None:
         """Commit updated vertex positions for an edited polygon to the model.
@@ -658,9 +658,9 @@ class ImageAnnotator(QMainWindow):
             self.ann_list.addItem(f"{a['category_name']} — {len(a['polygon'])} pts")
         self.ann_list.blockSignals(False)
 
-        # V4: tuple → QColor right at the draw boundary
+        # V4: tuple → QColor right at the draw boundary (added thickness with fallback)
         overlays = [
-            (a["polygon"], QColor(*self.model.get_class_color(a["category_name"])))
+            (a["polygon"], QColor(*self.model.get_class_color(a["category_name"])), a.get("thickness", 2.0))
             for a in annos
         ]
         self.canvas.set_overlays(overlays)

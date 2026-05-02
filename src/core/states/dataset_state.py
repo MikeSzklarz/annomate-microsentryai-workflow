@@ -60,7 +60,7 @@ class DatasetState:
 
     # --- Annotation CRUD ---
 
-    def add_annotation(self, image_name: str, category: str, polygon: list) -> None:
+    def add_annotation(self, image_name: str, category: str, polygon: list, thickness: float = 2.0) -> None:
         """Append a new polygon annotation to an image.
 
         Args:
@@ -68,10 +68,17 @@ class DatasetState:
             category (str): Class name for the annotation.
             polygon (list): Sequence of (x, y) coordinate pairs defining
                 the polygon boundary.
+            thickness (float): Line thickness for the annotation (default: 2.0).
         """
         self.annotations.setdefault(image_name, []).append(
-            {"category_name": category, "polygon": polygon}
+            {"category_name": category, "polygon": polygon, "thickness": thickness}
         )
+
+    def update_annotation_thickness(self, image_name: str, index: int, thickness: float) -> None:
+        """Update the thickness of a specific polygon."""
+        annos = self.annotations.get(image_name, [])
+        if 0 <= index < len(annos):
+            annos[index]["thickness"] = thickness
 
     def delete_annotation(self, image_name: str, index: int) -> None:
         """Remove the annotation at *index* for *image_name*.
