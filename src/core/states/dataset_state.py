@@ -46,6 +46,11 @@ class DatasetState:
         self.notes.clear()
         self.review_decisions.clear()
 
+    def reset_classes(self) -> None:
+        """Reset the class registry back to defaults."""
+        self.class_names = list(DEFAULT_CLASSES.keys())
+        self.class_colors = dict(DEFAULT_CLASSES)
+
     def is_reviewed(self, img_name: str) -> bool:
         """Return whether an image has at least one annotation or metadata entry.
 

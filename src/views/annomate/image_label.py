@@ -209,6 +209,24 @@ class ImageLabel(QLabel):
         self._heatmap_alpha = 0.0
         self.update()
 
+    def clear_image(self) -> None:
+        """Clear the displayed image and reset all canvas state to blank."""
+        self._display_qpix = None
+        self._orig_image_bgr = None
+        self._heatmap_pix = None
+        self._heatmap_alpha = 0.0
+        self._zoom = 1.0
+        self._pan = QPointF(0, 0)
+        self.current_polygon_points.clear()
+        self._overlays = []
+        self._ai_overlays = []
+        self.selected_polygon_idx = -1
+        self._dragging_polygon = False
+        self._dragging_vertex_idx = -1
+        self._dragging_vertex_poly = -1
+        self._selected_ai_idx = -1
+        self.update()
+
     def set_tool(self, tool_name: Optional[str]) -> None:
         """Set the active interaction tool.
 

@@ -349,7 +349,13 @@ class WIPWindow(QWidget):
             self._load_row(0)
         else:
             self._current_row = -1
+            self._current_bgr = None
+            self._current_ai_contours = []
+            self._selected_ai_idx = -1
             self._review_bar.setVisible(False)
+            self._ai_popup.setVisible(False)
+            self.canvas.clear_image()
+            self.right_panel.set_current_row(-1)
 
     def _load_row(self, row: int) -> None:
         bgr = self.io_controller.load_image_for_display(row)

@@ -144,6 +144,7 @@ class ProjectController(QObject):
         """
         state = self._dataset_model.state
         state.clear()
+        state.reset_classes()
         self._inference_model.state.clear()
         self._validation_model.state.clear()
 
