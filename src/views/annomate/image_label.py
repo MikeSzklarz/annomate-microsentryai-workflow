@@ -715,7 +715,8 @@ class ImageLabel(QLabel):
         for i, (pts, color, thick) in enumerate(self._overlays):
             if len(pts) >= 2:
                 is_selected = (i == self.selected_polygon_idx)
-                pen = QPen(color, (thick * 2.0) if is_selected else thick) # Thicker if selected
+                screen_thick = ((thick * 2.0) if is_selected else thick) / self._zoom
+                pen = QPen(color, screen_thick)
                 alpha = 150 if is_selected else 60         # Darker fill if selected
 
                 painter.setPen(pen)
@@ -726,7 +727,7 @@ class ImageLabel(QLabel):
                     # Scale handles so they don't get tiny when zoomed out
                     r = max(4.0 / self._zoom, 1.0)
                     painter.setBrush(QBrush(QColor("#FFEB3B")))
-                    painter.setPen(QPen(QColor(20, 20, 20), 1))
+                    painter.setPen(QPen(QColor(20, 20, 20), 1.0 / self._zoom))
                     for p in pts:
                         painter.drawEllipse(p, r, r)
 
@@ -735,7 +736,7 @@ class ImageLabel(QLabel):
             if len(pts) < 3:
                 continue
             is_selected = (i == self._selected_ai_idx)
-            pen = QPen(QColor(255, 80, 80), 2.5 if is_selected else 1.5, Qt.DashLine)
+            pen = QPen(QColor(255, 80, 80), (2.5 if is_selected else 1.5) / self._zoom, Qt.DashLine)
             pen.setDashPattern([6, 4])
             painter.setPen(pen)
             fill_alpha = 60 if is_selected else 20
@@ -744,7 +745,7 @@ class ImageLabel(QLabel):
 
         if self.current_tool == POLYGON and self.current_polygon_points:
             painter.setBrush(Qt.NoBrush)
-            painter.setPen(QPen(self._active_color, self._line_thickness))
+            painter.setPen(QPen(self._active_color, self._line_thickness / self._zoom))
             painter.drawPolyline(QPolygonF(self.current_polygon_points))
 
             if self._mouse_pos:
