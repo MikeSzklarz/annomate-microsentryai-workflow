@@ -48,9 +48,6 @@ class ImageLabel(QLabel):
             display (scaled) coordinates.
         selected_polygon_idx (int): Index of the currently selected overlay polygon,
             or ``-1`` when none is selected.
-        editing_polygon_idx (int): Index of the overlay polygon in vertex-edit mode,
-            or ``-1`` when not editing.
-        dragging_vertex_idx (int): Index of the vertex being dragged, or ``-1``.
 
     Signals:
         polygonFinished (list): Emitted when the user completes a polygon. Carries
@@ -105,9 +102,9 @@ class ImageLabel(QLabel):
 
         # --- UI State Trackers ---
         self.selected_polygon_idx: int = -1
-        self.editing_polygon_idx: int = -1
-        self.dragging_vertex_idx: int = -1
         self._dragging_polygon: bool = False
+        self._dragging_vertex_idx: int = -1
+        self._dragging_vertex_poly: int = -1
         self._selected_ai_idx: int = -1
 
     def set_image(self, bgr: np.ndarray, max_display_dim: int = 1200) -> None:
@@ -164,9 +161,9 @@ class ImageLabel(QLabel):
         self._heatmap_pix = None
         self._heatmap_alpha = 0.0
         self.selected_polygon_idx = -1
-        self.editing_polygon_idx = -1
-        self.dragging_vertex_idx = -1
         self._dragging_polygon = False
+        self._dragging_vertex_idx = -1
+        self._dragging_vertex_poly = -1
         self._selected_ai_idx = -1
 
         self.update()
@@ -258,13 +255,6 @@ class ImageLabel(QLabel):
             self._overlays.append((disp_pts, color, thick))
 
         n = len(self._overlays)
-        if self.editing_polygon_idx >= n:
-            logger.debug(
-                "editing_polygon_idx %d out of range after overlay update (new size %d) — resetting",
-                self.editing_polygon_idx, n,
-            )
-            self.editing_polygon_idx = -1
-            self.setCursor(Qt.ArrowCursor)
         if self.selected_polygon_idx >= n:
             logger.debug(
                 "selected_polygon_idx %d out of range after overlay update (new size %d) — resetting",
@@ -317,7 +307,7 @@ class ImageLabel(QLabel):
         Returns:
             bool: ``True`` if a vertex drag or whole-polygon drag is active.
         """
-        return self.dragging_vertex_idx != -1 or self._dragging_polygon
+        return self._dragging_polygon or self._dragging_vertex_idx != -1
 
     def view_to_display(self, p_view: QPointF) -> QPointF:
         """Convert a point from view (widget) coordinates to display coordinates.
@@ -346,6 +336,42 @@ class ImageLabel(QLabel):
             Tuple[float, float]: ``(x, y)`` in the original unscaled image.
         """
         return (p_disp.x() / self._base_scale, p_disp.y() / self._base_scale)
+
+    def _near_polygon_start(self, pos_view: QPointF, threshold: float = 10.0) -> bool:
+        """Return True if pos_view is within threshold screen pixels of the first in-progress vertex.
+
+        Requires at least 3 placed vertices so the resulting polygon is valid.
+        """
+        if len(self.current_polygon_points) < 3:
+            return False
+        first = self.current_polygon_points[0]
+        first_view = QPointF(
+            first.x() * self._zoom + self._pan.x(),
+            first.y() * self._zoom + self._pan.y(),
+        )
+        dx = pos_view.x() - first_view.x()
+        dy = pos_view.y() - first_view.y()
+        return (dx * dx + dy * dy) ** 0.5 < threshold
+
+    def _find_nearest_vertex(self, pos_view: QPointF, threshold: float = 10.0):
+        """Return (poly_idx, vertex_idx) of the nearest overlay vertex within threshold screen pixels, or (-1, -1)."""
+        best_dist = threshold
+        best_poly = -1
+        best_vert = -1
+        for poly_i, (pts, _, _) in enumerate(self._overlays):
+            for vert_i, p_disp in enumerate(pts):
+                p_view = QPointF(
+                    p_disp.x() * self._zoom + self._pan.x(),
+                    p_disp.y() * self._zoom + self._pan.y(),
+                )
+                dx = pos_view.x() - p_view.x()
+                dy = pos_view.y() - p_view.y()
+                dist = (dx * dx + dy * dy) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    best_poly = poly_i
+                    best_vert = vert_i
+        return best_poly, best_vert
 
     def finish_current_polygon(self) -> None:
         """Emit :attr:`polygonFinished` with the current polygon and clear it.
@@ -385,10 +411,7 @@ class ImageLabel(QLabel):
         super().keyPressEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        """Finish the current polygon or enter vertex-edit mode on double-click.
-
-        - While drawing (polygon tool active): finishes and emits the polygon.
-        - Otherwise: enters edit mode for the top-most polygon under the cursor.
+        """Finish the current polygon on double-click while drawing.
 
         Args:
             event (QMouseEvent): The mouse double-click event.
@@ -396,22 +419,6 @@ class ImageLabel(QLabel):
         if self.current_tool == POLYGON and self.current_polygon_points:
             self.finish_current_polygon()
             return
-
-         # --- Double Click to Edit ---
-        if event.button() == Qt.LeftButton:
-            pos_disp = self.view_to_display(QPointF(event.pos()))
-            found_idx = -1
-            for i, (pts, _, _) in enumerate(reversed(self._overlays)):
-                if QPolygonF(pts).containsPoint(pos_disp, Qt.OddEvenFill):
-                    found_idx = len(self._overlays) - 1 - i
-                    break
-
-            if found_idx != -1:
-                self.editing_polygon_idx = found_idx
-                self.selected_polygon_idx = found_idx
-                self.polygonSelected.emit(found_idx)
-                self.update()
-                return
 
         super().mouseDoubleClickEvent(event)
 
@@ -445,8 +452,8 @@ class ImageLabel(QLabel):
                     found_idx = len(self._overlays) - 1 - i
                     break
 
-            # Check AI polygons when no tool is active and not in edit mode
-            if self.current_tool != POLYGON and self.editing_polygon_idx == -1 and self._ai_overlays:
+            # Check AI polygons when no tool is active
+            if self.current_tool != POLYGON and self._ai_overlays:
                 ai_hit = -1
                 for i, pts in enumerate(reversed(self._ai_overlays)):
                     if len(pts) >= 3 and QPolygonF(pts).containsPoint(pos_disp, Qt.OddEvenFill):
@@ -462,48 +469,32 @@ class ImageLabel(QLabel):
                     self.update()
                     self.ai_polygon_clicked.emit(-1, pos_view)
 
-            # 1. Edit Mode: Vertex Dragging & Polygon Dragging
-            if self.editing_polygon_idx != -1:
-                pts, _, _ = self._overlays[self.editing_polygon_idx]
-                closest_idx = -1
-                min_dist = float('inf')
-
-                for i, p_disp in enumerate(pts):
-                    p_view = QPointF(
-                        p_disp.x() * self._zoom + self._pan.x(),
-                        p_disp.y() * self._zoom + self._pan.y()
-                    )
-                    dist = ((p_view.x() - pos_view.x())**2 + (p_view.y() - pos_view.y())**2)**0.5
-                    if dist < 10.0 and dist < min_dist:
-                        min_dist = dist
-                        closest_idx = i
-
-                if closest_idx != -1:
-                    self.dragging_vertex_idx = closest_idx
-                    return
-
-                if QPolygonF(pts).containsPoint(pos_disp, Qt.OddEvenFill):
-                    self._dragging_polygon = True
-                    self._last_mouse_pos = pos_view
-                    return
-                else:
-                    self.editing_polygon_idx = -1
-                    self.setCursor(Qt.ArrowCursor)
-                    self.update()
-
-            # 2. Normal Polygon Drawing
+            # 1. Normal Polygon Drawing
             if self.current_tool == POLYGON:
                 # Visually highlight the polygon we clicked on, even while drawing
                 if not self.current_polygon_points:
                     self.selected_polygon_idx = found_idx
                     self.polygonSelected.emit(found_idx)
 
-                # Unconditionally add the point instead of checking for proximity to the first point
+                if self._near_polygon_start(pos_view):
+                    self.setCursor(Qt.ArrowCursor)
+                    self.finish_current_polygon()
+                    return
+
                 self.current_polygon_points.append(self.view_to_display(QPointF(event.pos())))
                 self.update()
                 return
 
-            # 3. Normal Selection & Polygon Dragging (When Polygon Tool is OFF)
+            # 2. Normal Selection & Polygon Dragging (When Polygon Tool is OFF)
+            poly_i, vert_i = self._find_nearest_vertex(pos_view)
+            if poly_i != -1:
+                self._dragging_vertex_poly = poly_i
+                self._dragging_vertex_idx = vert_i
+                self.selected_polygon_idx = poly_i
+                self.polygonSelected.emit(poly_i)
+                self.update()
+                return
+
             self.selected_polygon_idx = found_idx
             self.update()
             self.polygonSelected.emit(found_idx)
@@ -524,10 +515,11 @@ class ImageLabel(QLabel):
         """
         self._mouse_pos = QPointF(event.pos())
 
-        if self.dragging_vertex_idx != -1 and self.editing_polygon_idx != -1:
+        # --- Drag vertex ---
+        if self._dragging_vertex_idx != -1:
             new_pos = self.view_to_display(self._mouse_pos)
-            pts, _, _ = self._overlays[self.editing_polygon_idx]
-            pts[self.dragging_vertex_idx] = new_pos
+            pts, _, _ = self._overlays[self._dragging_vertex_poly]
+            pts[self._dragging_vertex_idx] = new_pos
             self.update()
             return
 
@@ -552,32 +544,16 @@ class ImageLabel(QLabel):
             return
 
         if self.current_tool == POLYGON and self.current_polygon_points:
+            if self._near_polygon_start(self._mouse_pos):
+                self.setCursor(Qt.CrossCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
             self.update()
             return
 
-        if self.editing_polygon_idx != -1 and not self._dragging_polygon and not self._panning:
-            if self.editing_polygon_idx >= len(self._overlays):
-                logger.warning(
-                    "editing_polygon_idx %d is stale (overlays len %d) — clearing edit mode",
-                    self.editing_polygon_idx, len(self._overlays),
-                )
-                self.editing_polygon_idx = -1
-                self.setCursor(Qt.ArrowCursor)
-                return
-            pts, _, _ = self._overlays[self.editing_polygon_idx]
-            hovering = False
-            for p_disp in pts:
-                p_view = QPointF(
-                    p_disp.x() * self._zoom + self._pan.x(),
-                    p_disp.y() * self._zoom + self._pan.y()
-                )
-                dist = ((p_view.x() - self._mouse_pos.x())**2 + (p_view.y() - self._mouse_pos.y())**2)**0.5
-                if dist < 10.0:
-                    hovering = True
-                    break
-
-            # Switch to thin crosshair if hovering, otherwise standard arrow
-            self.setCursor(Qt.CrossCursor if hovering else Qt.ArrowCursor)
+        if self.current_tool is None and self._overlays:
+            poly_i, _ = self._find_nearest_vertex(self._mouse_pos)
+            self.setCursor(Qt.CrossCursor if poly_i != -1 else Qt.ArrowCursor)
 
         super().mouseMoveEvent(event)
 
@@ -591,17 +567,15 @@ class ImageLabel(QLabel):
             event (QMouseEvent): The mouse release event.
         """
         if event.button() == Qt.LeftButton:
-            # Commit Vertex Drag — reset flag BEFORE emitting so on_model_data_changed
-            # sees is_dragging() == False and can safely refresh overlays.
-            if self.dragging_vertex_idx != -1:
-                idx = self.editing_polygon_idx
-                pts, _, _ = self._overlays[idx]
+            if self._dragging_vertex_idx != -1:
+                poly_i = self._dragging_vertex_poly
+                pts, _, _ = self._overlays[poly_i]
                 pts_orig = [self.display_to_original(p) for p in pts]
-                self.dragging_vertex_idx = -1
-                self.polygonEdited.emit(idx, pts_orig)
+                self._dragging_vertex_idx = -1
+                self._dragging_vertex_poly = -1
+                self.polygonEdited.emit(poly_i, pts_orig)
                 return
 
-            # Commit Polygon Drag
             if self._dragging_polygon:
                 idx = self.selected_polygon_idx
                 pts, _, _ = self._overlays[idx]
@@ -723,13 +697,11 @@ class ImageLabel(QLabel):
                 painter.setBrush(QBrush(QColor(color.red(), color.green(), color.blue(), alpha)))
                 painter.drawPolygon(QPolygonF(pts + [pts[0]]))
 
-                if i == self.editing_polygon_idx:
-                    # Scale handles so they don't get tiny when zoomed out
-                    r = max(4.0 / self._zoom, 1.0)
-                    painter.setBrush(QBrush(QColor("#FFEB3B")))
-                    painter.setPen(QPen(QColor(20, 20, 20), 1.0 / self._zoom))
-                    for p in pts:
-                        painter.drawEllipse(p, r, r)
+                r = 4.0 / self._zoom
+                painter.setBrush(QBrush(color))
+                painter.setPen(QPen(QColor(20, 20, 20), 1.0 / self._zoom))
+                for p in pts:
+                    painter.drawEllipse(p, r, r)
 
         # Draw AI segmentation polygons as dashed ghost outlines
         for i, pts in enumerate(self._ai_overlays):
@@ -754,3 +726,13 @@ class ImageLabel(QLabel):
                     self.current_polygon_points[-1],
                     cursor_in_disp,
                 )
+
+            # Draw vertex dots — screen-constant radii by dividing by zoom
+            r_mid = 4.0 / self._zoom
+            r_first = 8.0 / self._zoom
+            outline_pen = QPen(QColor(20, 20, 20), 1.0 / self._zoom)
+            for j, pt in enumerate(self.current_polygon_points):
+                r = r_first if j == 0 else r_mid
+                painter.setBrush(QBrush(self._active_color))
+                painter.setPen(outline_pen)
+                painter.drawEllipse(pt, r, r)
