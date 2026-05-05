@@ -722,3 +722,27 @@ class WIPWindow(QWidget):
             if self.dataset_model.get_image_path(i) == path:
                 return i
         return -1
+
+    # ------------------------------------------------------------------ #
+    # Hotkeys
+    # ------------------------------------------------------------------ #
+
+    def keyPressEvent(self, event) -> None:
+        """Handle annotation hotkeys.
+
+        - ``P``: toggle polygon tool
+        - ``Delete``: delete the selected annotation
+
+        Args:
+            event: The key press event.
+        """
+        if event.key() == Qt.Key_P:
+            self.tool_palette.toggle_polygon()
+        elif event.key() == Qt.Key_Delete:
+            self._delete_selected_annotation()
+        super().keyPressEvent(event)
+
+    def _delete_selected_annotation(self) -> None:
+        idx = self.canvas.selected_polygon_idx
+        if idx != -1 and self._current_row >= 0:
+            self.dataset_model.delete_annotation(self._current_row, idx)

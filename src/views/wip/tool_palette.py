@@ -126,3 +126,18 @@ class ToolPalette(QFrame):
         for btn in self._btn_tool:
             btn.setChecked(False)
         self._btn_group.setExclusive(True)
+
+    def toggle_polygon(self) -> None:
+        """Toggle the polygon tool on/off, syncing button state and emitting tool_selected."""
+        for btn, tool_name in self._btn_tool.items():
+            if tool_name == "polygon":
+                if self._active_tool == "polygon":
+                    self.deselect_all()
+                    self.tool_selected.emit("")
+                else:
+                    self._active_tool = "polygon"
+                    self._btn_group.setExclusive(False)
+                    btn.setChecked(True)
+                    self._btn_group.setExclusive(True)
+                    self.tool_selected.emit("polygon")
+                return
