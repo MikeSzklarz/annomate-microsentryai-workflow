@@ -10,6 +10,7 @@ from core.utils.geometry import polygon_area
 
 logger = logging.getLogger("AnnoMate.DatasetModel")
 
+
 class DatasetTableModel(QAbstractTableModel):
     """Qt model layer for the dataset image list.
 
@@ -62,7 +63,9 @@ class DatasetTableModel(QAbstractTableModel):
         """
         return len(self.headers)
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole) -> object:
+    def headerData(
+        self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole
+    ) -> object:
         """Return header label for the given section and orientation.
 
         Args:
@@ -137,7 +140,9 @@ class DatasetTableModel(QAbstractTableModel):
         self.state.image_files = files
         self.endResetModel()
 
-    def add_annotation(self, row: int, category: str, polygon: list) -> None:
+    def add_annotation(
+        self, row: int, category: str, polygon: list, thickness: float = 2.0
+    ) -> None:
         """Append a polygon annotation to the image at *row*.
 
         Out-of-bounds *row* values are logged as errors and silently ignored.
@@ -148,15 +153,43 @@ class DatasetTableModel(QAbstractTableModel):
             category (str): Class name to assign to the annotation.
             polygon (list): Sequence of ``(x, y)`` coordinate pairs defining
                 the polygon boundary.
+            thickness (float): Line thickness for the annotation (default: 2.0).
         """
         if not (0 <= row < self.rowCount()):
             logger.error("Failed to add annotation: Row %d is out of bounds.", row)
             return
 
         filename = self.state.image_files[row]
-        logger.debug("Adding '%s' annotation to '%s' (%d points)", category, filename, len(polygon))
+        logger.debug(
+            "Adding '%s' annotation to '%s' (%d points)",
+            category,
+            filename,
+            len(polygon),
+        )
 
-        self.state.add_annotation(filename, category, polygon)
+        self.state.add_annotation(filename, category, polygon, thickness)
+        self._emit_row(row)
+
+    def update_annotation_thickness(
+        self, row: int, annotation_idx: int, thickness: float
+    ) -> None:
+        """Update the line thickness of an existing annotation."""
+        if not (0 <= row < self.rowCount()):
+            return
+        self.state.update_annotation_thickness(
+            self.state.image_files[row], annotation_idx, thickness
+        )
+        self._emit_row(row)
+
+    def update_annotation_class(
+        self, row: int, annotation_idx: int, new_class: str
+    ) -> None:
+        """Change the class of an existing annotation."""
+        if not (0 <= row < self.rowCount()):
+            return
+        self.state.update_annotation_class(
+            self.state.image_files[row], annotation_idx, new_class
+        )
         self._emit_row(row)
 
     def delete_annotation(self, row: int, annotation_idx: int) -> None:
@@ -174,12 +207,16 @@ class DatasetTableModel(QAbstractTableModel):
             return
 
         filename = self.state.image_files[row]
-        logger.debug("Deleted annotation at index %d from '%s'", annotation_idx, filename)
+        logger.debug(
+            "Deleted annotation at index %d from '%s'", annotation_idx, filename
+        )
 
         self.state.delete_annotation(self.state.image_files[row], annotation_idx)
         self._emit_row(row)
 
-    def update_annotation_points(self, row: int, annotation_idx: int, points: list) -> None:
+    def update_annotation_points(
+        self, row: int, annotation_idx: int, points: list
+    ) -> None:
         """Replace the polygon vertices of an existing annotation.
 
         Out-of-bounds *row* values are silently ignored. Emits
@@ -193,7 +230,9 @@ class DatasetTableModel(QAbstractTableModel):
         """
         if not (0 <= row < self.rowCount()):
             return
-        self.state.update_annotation_points(self.state.image_files[row], annotation_idx, points)
+        self.state.update_annotation_points(
+            self.state.image_files[row], annotation_idx, points
+        )
         self._emit_row(row)
 
     def set_inspector(self, row: int, value: str) -> None:
@@ -390,6 +429,65 @@ class DatasetTableModel(QAbstractTableModel):
         if not (0 <= row < self.rowCount()):
             return ""
         return self.state.notes.get(self.state.image_files[row], "")
+
+    def is_reviewed(self, row: int) -> bool:
+        """Return whether the image at *row* has been reviewed.
+
+        Args:
+            row (int): Zero-based row index of the target image.
+
+        Returns:
+            bool: ``True`` if the image has annotations, an inspector, or a
+                note; ``False`` for out-of-bounds rows or unreviewed images.
+        """
+        if not (0 <= row < self.rowCount()):
+            return False
+        return self.state.is_reviewed(self.state.image_files[row])
+
+    def set_review_decision(self, row: int, decision) -> None:
+        """Set the image-level review decision for the image at *row*.
+
+        Args:
+            row (int): Zero-based row index of the target image.
+            decision (str | None): ``"accept"``, ``"reject"``, or ``None`` to clear.
+        """
+        if not (0 <= row < self.rowCount()):
+            return
+        self.state.set_review_decision(self.state.image_files[row], decision)
+        self._emit_row(row)
+
+    def get_review_decision(self, row: int):
+        """Return the image-level review decision for the image at *row*, or None.
+
+        Args:
+            row (int): Zero-based row index of the target image.
+        """
+        if not (0 <= row < self.rowCount()):
+            return None
+        return self.state.get_review_decision(self.state.image_files[row])
+
+    def get_annotation_count(self, row: int) -> int:
+        """Return the number of polygon annotations for the image at *row*.
+
+        Args:
+            row (int): Zero-based row index of the target image.
+        """
+        if not (0 <= row < self.rowCount()):
+            return 0
+        return len(self.state.annotations.get(self.state.image_files[row], []))
+
+    def get_image_filename(self, row: int) -> str:
+        """Return the raw filename (basename) for the image at *row*.
+
+        Args:
+            row (int): Zero-based row index of the target image.
+
+        Returns:
+            str: Filename string, or an empty string for out-of-bounds rows.
+        """
+        if not (0 <= row < self.rowCount()):
+            return ""
+        return self.state.image_files[row]
 
     # ------------------------------------------------------------------ #
     # Internal helpers

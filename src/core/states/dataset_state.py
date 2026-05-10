@@ -28,13 +28,14 @@ class DatasetState:
         self.image_files = []
 
         # Annotations & Metadata
-        self.annotations = {}   # { "img.jpg": [ { "category_name": str, "polygon": [...] } ] }
-        self.inspectors = {}    # { "img.jpg": "John Doe" }
-        self.notes = {}         # { "img.jpg": "Needs review" }
+        self.annotations = {}  # { "img.jpg": [ { "category_name": str, "polygon": [...] } ] }
+        self.inspectors = {}  # { "img.jpg": "John Doe" }
+        self.notes = {}  # { "img.jpg": "Needs review" }
+        self.review_decisions = {}  # { "img.jpg": "accept" | "reject" }
 
         # Class registry — initialized from defaults, NOT cleared on folder load
         self.class_names = list(DEFAULT_CLASSES.keys())
-        self.class_colors = dict(DEFAULT_CLASSES)   # { name: (r, g, b) }
+        self.class_colors = dict(DEFAULT_CLASSES)  # { name: (r, g, b) }
 
     def clear(self) -> None:
         """Reset per-folder data. Class registry is intentionally preserved."""
@@ -43,6 +44,12 @@ class DatasetState:
         self.annotations.clear()
         self.inspectors.clear()
         self.notes.clear()
+        self.review_decisions.clear()
+
+    def reset_classes(self) -> None:
+        """Reset the class registry back to defaults."""
+        self.class_names = list(DEFAULT_CLASSES.keys())
+        self.class_colors = dict(DEFAULT_CLASSES)
 
     def is_reviewed(self, img_name: str) -> bool:
         """Return whether an image has at least one annotation or metadata entry.
@@ -56,11 +63,14 @@ class DatasetState:
         """
         has_anno = bool(self.annotations.get(img_name))
         has_meta = bool(self.inspectors.get(img_name) or self.notes.get(img_name))
-        return has_anno or has_meta
+        has_decision = img_name in self.review_decisions
+        return has_anno or has_meta or has_decision
 
     # --- Annotation CRUD ---
 
-    def add_annotation(self, image_name: str, category: str, polygon: list) -> None:
+    def add_annotation(
+        self, image_name: str, category: str, polygon: list, thickness: float = 2.0
+    ) -> None:
         """Append a new polygon annotation to an image.
 
         Args:
@@ -68,10 +78,27 @@ class DatasetState:
             category (str): Class name for the annotation.
             polygon (list): Sequence of (x, y) coordinate pairs defining
                 the polygon boundary.
+            thickness (float): Line thickness for the annotation (default: 2.0).
         """
         self.annotations.setdefault(image_name, []).append(
-            {"category_name": category, "polygon": polygon}
+            {"category_name": category, "polygon": polygon, "thickness": thickness}
         )
+
+    def update_annotation_thickness(
+        self, image_name: str, index: int, thickness: float
+    ) -> None:
+        """Update the thickness of a specific polygon."""
+        annos = self.annotations.get(image_name, [])
+        if 0 <= index < len(annos):
+            annos[index]["thickness"] = thickness
+
+    def update_annotation_class(
+        self, image_name: str, index: int, new_class: str
+    ) -> None:
+        """Change the category_name of a specific annotation."""
+        annos = self.annotations.get(image_name, [])
+        if 0 <= index < len(annos):
+            annos[index]["category_name"] = new_class
 
     def delete_annotation(self, image_name: str, index: int) -> None:
         """Remove the annotation at *index* for *image_name*.
@@ -85,7 +112,9 @@ class DatasetState:
         if 0 <= index < len(annos):
             annos.pop(index)
 
-    def update_annotation_points(self, image_name: str, index: int, points: list) -> None:
+    def update_annotation_points(
+        self, image_name: str, index: int, points: list
+    ) -> None:
         """Replace the polygon points of an existing annotation.
 
         Args:
@@ -123,8 +152,7 @@ class DatasetState:
             self.class_colors.pop(name, None)
             for img in self.annotations:
                 self.annotations[img] = [
-                    a for a in self.annotations[img]
-                    if a.get("category_name") != name
+                    a for a in self.annotations[img] if a.get("category_name") != name
                 ]
 
     # --- Per-image Metadata ---
@@ -146,3 +174,19 @@ class DatasetState:
             value (str): Note content to store.
         """
         self.notes[image_name] = value
+
+    def set_review_decision(self, image_name: str, decision) -> None:
+        """Set the image-level review decision.
+
+        Args:
+            image_name (str): Target image filename.
+            decision (str | None): ``"accept"``, ``"reject"``, or ``None`` to clear.
+        """
+        if decision is None:
+            self.review_decisions.pop(image_name, None)
+        else:
+            self.review_decisions[image_name] = decision
+
+    def get_review_decision(self, image_name: str):
+        """Return the image-level review decision, or None if not set."""
+        return self.review_decisions.get(image_name)

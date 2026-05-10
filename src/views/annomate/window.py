@@ -1,727 +1,922 @@
-"""
-ImageAnnotator — the AnnoMate View.
+"""AnnoMateWindow — unified annotation and inference main window.
 
-Rules enforced here:
-  V1  All file/folder dialogs and message boxes live in this file, not in
-      controllers.  Controllers receive plain paths and return plain values.
-  V2  This file never reads self.model.state directly.  All data access goes
-      through the Model's query API (get_annotations, get_class_color, …).
-  V3  No disk I/O here.  Image loading is delegated to io_controller and the
-      resulting ndarray is handed to the canvas widget.
-  V4  Colors are handled as (r, g, b) tuples until the last moment; QColor
-      is only constructed right before a draw call.
+See MVC.md § Architecture Rules for the full layer contract.
+Color scheme: no explicit stylesheet colors — Qt platform palette only.
 """
 
+import logging
 import os
-from pathlib import Path
 
+import cv2
+import numpy as np
+from PySide6.QtCore import Qt, QEvent, QPointF, Signal
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QComboBox, QLineEdit, QTextEdit,
-    QScrollArea, QTableView, QHeaderView, QAbstractItemView,
-    QListWidget, QColorDialog, QFileDialog, QMessageBox,
+    QWidget,
+    QFrame,
+    QVBoxLayout,
+    QSizePolicy,
+    QToolButton,
+    QFileDialog,
+    QMessageBox,
+    QHBoxLayout,
+    QComboBox,
+    QApplication,
 )
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
 
-from core.utils.geometry import scale_polygon_about_center
-from views.annomate.image_label import ImageLabel, POLYGON
-from views.annomate.widgets import CustomSplitter
+from views.annomate._splitter import StyledSplitter
+
+from views.annomate.image_label import ImageLabel, SAM_BBOX
+from views.annomate.right_panel import RightPanel
+from views.annomate.tool_palette import ToolPalette
+from views.annomate.status_bar import AnnoMateStatusBar
+from controllers.sam_controller import SAMController
+
+logger = logging.getLogger(__name__)
 
 
-class ImageAnnotator(QMainWindow):
-    """Main window for the AnnoMate annotation pane.
+class _AIAcceptPopup(QFrame):
+    """Floating accept button + class selector for a selected AI polygon."""
 
-    Owns all Qt dialogs (file pickers, message boxes) for the AnnoMate
-    workflow. Delegates all file I/O to ``io_controller`` and all data
-    mutations to ``model``. Never reads ``model.state`` directly — all data
-    access goes through the model's query API.
+    accepted = Signal()
 
-    Attributes:
-        model: Dataset model exposing the query/command API.
-        io_controller: I/O controller for folder scanning and export.
-        canvas (ImageLabel): Interactive image canvas widget.
+    _BTN_SIZE = 28
 
-    Signals:
-        viewChanged (float, float, float): Reserved for future multi-tab
-            pan/zoom sync.
-        row_selection_changed (int): Emitted when the selected row changes,
-            for cross-tab sync.
+    def __init__(self, canvas: QWidget, parent: QWidget = None) -> None:
+        super().__init__(parent or canvas)
+        self._canvas = canvas
+        self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        self.setAutoFillBackground(True)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        btn_accept = QToolButton()
+        btn_accept.setText("✓")
+        btn_accept.setToolTip("Accept polygon into selected class")
+        btn_accept.setFixedSize(self._BTN_SIZE, self._BTN_SIZE)
+        btn_accept.clicked.connect(self.accepted)
+        layout.addWidget(btn_accept)
+
+        self._combo = QComboBox()
+        self._combo.setToolTip("Class to assign polygon to")
+        layout.addWidget(self._combo)
+
+        self.adjustSize()
+        self.setVisible(False)
+
+    def set_classes(self, names: list, active: str) -> None:
+        self._combo.blockSignals(True)
+        self._combo.clear()
+        self._combo.addItems(names)
+        if active in names:
+            self._combo.setCurrentIndex(names.index(active))
+        self._combo.blockSignals(False)
+
+    def current_class(self) -> str:
+        return self._combo.currentText()
+
+    def show_at_polygon(self, bbox) -> None:
+        """Position just outside the right edge of *bbox* (a QRect in widget coords)."""
+        x = bbox.right() + 8
+        y = bbox.top()
+        # If too close to the right edge, flip to the left side
+        if x + self.width() > self._canvas.width():
+            x = bbox.left() - self.width() - 8
+        x = max(0, x)
+        y = max(0, min(y, self._canvas.height() - self.height()))
+        self.move(x, y)
+        self.setVisible(True)
+        self.raise_()
+
+
+class _ReviewBar(QFrame):
+    """Floating Accept/Reject bar positioned at the top-right of the canvas.
+
+    Emits decision_changed("accept"), decision_changed("reject"), or
+    decision_changed(None) when the user toggles a button.
     """
 
-    viewChanged           = Signal(float, float, float)  # reserved for future multi-tab sync
-    row_selection_changed = Signal(int)                  # emitted when the current row changes (for cross-tab sync)
+    decision_changed = Signal(object)
 
-    def __init__(self, model, io_controller) -> None:
-        """Initialize ImageAnnotator and build the UI.
+    _MARGIN = 10
+    _BTN_H = 28
 
-        Args:
-            model: Dataset model instance exposing query/command API.
-            io_controller: I/O controller for folder loading and export.
-        """
-        super().__init__()
-        self.model = model
+    def __init__(self, canvas: QWidget, parent: QWidget = None) -> None:
+        super().__init__(parent)
+        self._canvas = canvas
+        self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        self.setAutoFillBackground(True)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(6)
+
+        self._btn_accept = QToolButton()
+        self._btn_accept.setText("✓ Accept")
+        self._btn_accept.setToolTip("Mark this image as accepted")
+        self._btn_accept.setCheckable(True)
+        self._btn_accept.setFixedHeight(self._BTN_H)
+        self._btn_accept.clicked.connect(
+            lambda checked: self._on_clicked("accept", checked)
+        )
+        layout.addWidget(self._btn_accept)
+
+        self._btn_reject = QToolButton()
+        self._btn_reject.setText("✗ Reject")
+        self._btn_reject.setToolTip("Mark this image as rejected")
+        self._btn_reject.setCheckable(True)
+        self._btn_reject.setFixedHeight(self._BTN_H)
+        self._btn_reject.clicked.connect(
+            lambda checked: self._on_clicked("reject", checked)
+        )
+        layout.addWidget(self._btn_reject)
+
+        self.adjustSize()
+        self.setVisible(False)
+
+    def _on_clicked(self, which: str, checked: bool) -> None:
+        if checked:
+            other = self._btn_reject if which == "accept" else self._btn_accept
+            other.setChecked(False)
+            self._update_styles()
+            self.decision_changed.emit(which)
+        else:
+            self._update_styles()
+            self.decision_changed.emit(None)
+
+    def set_decision(self, decision) -> None:
+        """Silently update button states to reflect *decision* without emitting."""
+        self._btn_accept.blockSignals(True)
+        self._btn_reject.blockSignals(True)
+        self._btn_accept.setChecked(decision == "accept")
+        self._btn_reject.setChecked(decision == "reject")
+        self._btn_accept.blockSignals(False)
+        self._btn_reject.blockSignals(False)
+        self._update_styles()
+
+    def _update_styles(self) -> None:
+        self._btn_accept.setStyleSheet(
+            "background-color: #4caf50; color: white;"
+            if self._btn_accept.isChecked()
+            else ""
+        )
+        self._btn_reject.setStyleSheet(
+            "background-color: #f44336; color: white;"
+            if self._btn_reject.isChecked()
+            else ""
+        )
+
+    def reposition(self, canvas_size) -> None:
+        x = canvas_size.width() - self.width() - self._MARGIN
+        self.move(max(0, x), self._MARGIN)
+
+
+class _ZoomToolbar(QFrame):
+    """Floating vertical toolbar with zoom-in, zoom-out, and reset-view buttons."""
+
+    _MARGIN = 10
+    _BTN_SIZE = 30
+
+    def __init__(self, canvas, parent: QWidget = None) -> None:
+        super().__init__(parent)
+        self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+
+        font = QFont()
+        font.setPointSize(14)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(2)
+
+        for text, tip, slot in (
+            ("+", "Zoom In", canvas.zoom_in),
+            ("−", "Zoom Out", canvas.zoom_out),
+            ("⊙", "Reset View", canvas.reset_view),
+        ):
+            btn = QToolButton()
+            btn.setText(text)
+            btn.setToolTip(tip)
+            btn.setFixedSize(self._BTN_SIZE, self._BTN_SIZE)
+            btn.setFont(font)
+            btn.clicked.connect(slot)
+            layout.addWidget(btn)
+
+        self.adjustSize()
+
+    def reposition(self, canvas_size) -> None:
+        x = self._MARGIN
+        y = canvas_size.height() - self.height() - self._MARGIN
+        self.move(x, y)
+
+
+class AnnoMateWindow(QWidget):
+    """Experimental Photoshop-style layout tab.
+
+    Receives the dataset model and IO controller so later phases can wire up
+    the canvas, navigator, and class panel without touching AppWindow.
+
+    Args:
+        dataset_model: DatasetTableModel instance.
+        io_controller: IOController instance.
+        parent: Optional Qt parent widget.
+    """
+
+    def __init__(
+        self,
+        dataset_model,
+        io_controller,
+        inference_model=None,
+        inference_controller=None,
+        parent: QWidget = None,
+    ) -> None:
+        super().__init__(parent)
+        self.dataset_model = dataset_model
         self.io_controller = io_controller
-        self._syncing = False   # guard against recursive cross-tab row sync
-
+        self.inference_model = inference_model
+        self.inference_controller = inference_controller
+        self._current_row: int = -1
+        self._active_class: str = ""
+        self._active_tool: str = ""
+        self._microsentry_enabled: bool = False
+        self._current_bgr = None
+        self._current_ai_contours: list = []
+        self._selected_ai_idx: int = -1
+        self._saved_model_path: str = ""
+        self._sam_controller = SAMController(parent=self)
+        self._sam_loading: bool = False
         self._init_ui()
-        self._setup_connections()
 
-    # ================================================================== #
-    # UI Construction
-    # ================================================================== #
+        # Dataset changes
+        self.dataset_model.modelReset.connect(self._on_model_reset)
+
+        # Canvas → navigation / annotation
+        self.canvas.polygonFinished.connect(self._on_polygon_finished)
+        self.canvas.polygonEdited.connect(self._on_polygon_edited)
+        self.canvas.toolCanceled.connect(self._on_tool_canceled)
+        self.canvas.polygonSelected.connect(self._on_canvas_polygon_selected)
+        self.canvas.ai_polygon_clicked.connect(self._on_ai_polygon_clicked)
+
+        # Canvas → status bar (live feedback)
+        self.canvas.zoom_changed.connect(self.status_bar.set_zoom)
+        self.canvas.image_loaded.connect(self.status_bar.set_dimensions)
+
+        # Right panel
+        self.right_panel.image_selected.connect(self._load_row)
+        self.right_panel.class_selected.connect(self._set_active_class)
+        self.right_panel.prev_requested.connect(self._prev_image)
+        self.right_panel.next_requested.connect(self._next_image)
+        self.right_panel.annotation_selected.connect(self._on_annotation_selected)
+        self.right_panel.load_model_requested.connect(self._on_load_model_requested)
+        self.right_panel.load_previous_model_requested.connect(
+            self._on_load_previous_model_requested
+        )
+        self.right_panel.microsentry_settings_changed.connect(
+            self._refresh_canvas_render
+        )
+        self.right_panel.accept_polygons_requested.connect(self._on_accept_ai_polygons)
+
+        # Keep canvas in sync when annotations change outside the canvas
+        self.dataset_model.dataChanged.connect(self._on_dataset_data_changed)
+
+        # Tool palette
+        self.tool_palette.tool_selected.connect(self._on_tool_selected)
+        self.canvas.draw_attempted.connect(self._on_draw_attempted)
+
+        # Route thickness signal directly to canvas setter
+        self.tool_palette.thickness_changed.connect(self._on_thickness_changed)
+
+        # SAM tool
+        self.canvas.samBboxDrawn.connect(self._on_sam_bbox_drawn)
+        self.tool_palette.sam_variant_changed.connect(self._on_sam_variant_changed)
+        self._sam_controller.result_ready.connect(self._on_sam_result_ready)
+        self._sam_controller.inference_failed.connect(self._on_sam_inference_failed)
+        self._sam_controller.loading_done.connect(self._on_sam_loading_done)
+        self._sam_controller.loading_failed.connect(self._on_sam_loading_failed)
+
+        # Auto-load SAM silently if the checkpoint is already on disk
+        variant = self.tool_palette.current_sam_variant()
+        logger.info(
+            "AnnoMateWindow startup: checking for cached SAM weights (%s)", variant
+        )
+        if self._sam_controller.try_autoload(variant):
+            self._sam_loading = True
+            logger.info("AnnoMateWindow startup: SAM autoload initiated")
+
+        # Inference controller signals
+        if self.inference_controller is not None:
+            self.inference_controller.result_ready.connect(self._on_inference_result)
+            self.inference_controller.progress.connect(self._on_inference_progress)
+            self.inference_controller.batch_done.connect(self._on_inference_batch_done)
+
+    # ------------------------------------------------------------------ #
+    # UI construction
+    # ------------------------------------------------------------------ #
 
     def _init_ui(self) -> None:
-        """Build the top-level horizontal splitter with canvas and sidebar."""
-        self.main_splitter = CustomSplitter(Qt.Horizontal, self)
-        self._setup_canvas()
-        self._setup_sidebar()
-        self.main_splitter.setSizes([900, 420])
-        self.setCentralWidget(self.main_splitter)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-    def _setup_canvas(self) -> None:
-        """Create the :class:`ImageLabel` canvas and add it to the splitter."""
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(self._build_workspace(), stretch=1)
+
+        self.status_bar = AnnoMateStatusBar(self)
+        root.addWidget(self.status_bar)
+
+    def _build_workspace(self) -> QWidget:
+        workspace = QWidget()
+        workspace.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        h_layout = QHBoxLayout(workspace)
+        h_layout.setContentsMargins(0, 0, 0, 0)
+        h_layout.setSpacing(0)
+
+        self.tool_palette = ToolPalette(self)
+        h_layout.addWidget(self.tool_palette)
+
+        splitter = StyledSplitter(Qt.Horizontal, margin=0)
+        splitter.setHandleWidth(8)
+        splitter.setChildrenCollapsible(False)
+
         self.canvas = ImageLabel(self)
-        layout.addWidget(self.canvas)
-        self.main_splitter.addWidget(container)
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        splitter.addWidget(self.canvas)
 
-    def _setup_sidebar(self) -> None:
-        """Build the scrollable sidebar and populate it with control groups."""
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(320)
+        self._zoom_toolbar = _ZoomToolbar(self.canvas, self.canvas)
+        self._zoom_toolbar.raise_()
 
-        side_widget = QWidget()
-        self.side_layout = QVBoxLayout(side_widget)
-        self.side_layout.setContentsMargins(10, 10, 10, 10)
-        self.side_layout.setSpacing(10)
+        self._review_bar = _ReviewBar(self.canvas, self.canvas)
+        self._review_bar.decision_changed.connect(self._on_review_decision)
+        self._review_bar.raise_()
 
-        self._create_tray_header()
-        self._create_nav_controls()
-        self._create_zoom_controls()
-        self._create_class_controls()
-        self._create_meta_inputs()
-        self._create_dataset_table()
-        self._create_annotation_list()
-        self._create_ops_controls()
-        self._create_export_controls()
+        self._ai_popup = _AIAcceptPopup(self.canvas, self.canvas)
+        self._ai_popup.accepted.connect(self._on_accept_single_ai)
 
-        self.side_layout.addStretch()
-        scroll.setWidget(side_widget)
-        self.main_splitter.addWidget(scroll)
+        self.canvas.installEventFilter(self)
 
-    def _create_tray_header(self) -> None:
-        """Add the folder-open button and current directory label to the sidebar."""
-        row = QHBoxLayout()
-        self.btn_open_folder = QPushButton("📂 Open Folder")
-        self.btn_open_folder.setFixedHeight(35)
-        self.lbl_dir = QLabel("—")
-        self.lbl_dir.setStyleSheet("font-weight: bold;")
-        row.addWidget(self.btn_open_folder)
-        row.addWidget(self.lbl_dir, 1)
-        self.side_layout.addLayout(row)
+        self.right_panel = RightPanel(self.dataset_model, self.inference_model, self)
+        self.right_panel.setMinimumWidth(160)
+        splitter.addWidget(self.right_panel)
 
-    def _create_nav_controls(self) -> None:
-        """Add Prev/Next navigation buttons and the image counter label."""
-        nav = QHBoxLayout()
-        self.btn_prev = QPushButton("◀ Prev (A)")
-        self.btn_next = QPushButton("Next (D) ▶")
-        self.btn_prev.setShortcut("A")
-        self.btn_next.setShortcut("D")
-        self.lbl_img = QLabel("0 / 0")
-        self.lbl_img.setAlignment(Qt.AlignCenter)
-        nav.addWidget(self.btn_prev)
-        nav.addWidget(self.btn_next)
-        nav.addWidget(self.lbl_img)
-        self.side_layout.addLayout(nav)
+        splitter.setSizes([700, 280])
+        h_layout.addWidget(splitter, stretch=1)
 
-    def _create_zoom_controls(self) -> None:
-        """Add zoom in/out, reset view, and polygon tool buttons to the sidebar."""
-        bar = QHBoxLayout()
-        self.btn_zoom_in = QPushButton("Zoom +")
-        self.btn_zoom_in.clicked.connect(self.canvas.zoom_in)
-        self.btn_zoom_out = QPushButton("Zoom -")
-        self.btn_zoom_out.clicked.connect(self.canvas.zoom_out)
-        self.btn_reset_view = QPushButton("Reset View")
-        self.btn_reset_view.clicked.connect(self.canvas.reset_view)
-        self.btn_poly = QPushButton("Polygon (P)")
-        self.btn_poly.setCheckable(True)
-        self.btn_poly.setShortcut("P")
-        self.btn_poly.toggled.connect(self._on_polygon_tool_toggled)
-        for w in (self.btn_zoom_in, self.btn_zoom_out, self.btn_reset_view, self.btn_poly):
-            bar.addWidget(w)
-        self.side_layout.addLayout(bar)
+        return workspace
 
-    def _create_class_controls(self) -> None:
-        """Add class combo, name entry, add-class button, and color/delete buttons."""
-        row1 = QHBoxLayout()
-        self.class_combo = QComboBox()
-        # V2: use model query instead of model.state
-        self.class_combo.addItems(self.model.get_class_names())
-        self.class_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.class_name_edit = QLineEdit()
-        self.class_name_edit.setPlaceholderText("Enter class...")
-        self.btn_add_class = QPushButton("Add Class")
-        row1.addWidget(self.class_combo, 2)
-        row1.addWidget(self.class_name_edit, 2)
-        row1.addWidget(self.btn_add_class)
-        self.side_layout.addLayout(row1)
+    # ------------------------------------------------------------------ #
+    # Zoom toolbar positioning
+    # ------------------------------------------------------------------ #
 
-        row2 = QHBoxLayout()
-        self.btn_color = QPushButton("Change Color")
-        self.btn_del_class = QPushButton("Delete Class")
-        row2.addWidget(self.btn_color)
-        row2.addWidget(self.btn_del_class)
-        self.side_layout.addLayout(row2)
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._zoom_toolbar.reposition(self.canvas.size())
+        self._review_bar.reposition(self.canvas.size())
 
-    def _create_meta_inputs(self) -> None:
-        """Add inspector name and image-note text inputs to the sidebar."""
-        self.side_layout.addWidget(QLabel("Inspector"))
-        self.inspector_edit = QLineEdit()
-        self.inspector_edit.setPlaceholderText("Inspector name…")
-        self.side_layout.addWidget(self.inspector_edit)
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.canvas and event.type() == QEvent.Resize:
+            self._zoom_toolbar.reposition(event.size())
+            self._review_bar.reposition(event.size())
+        return super().eventFilter(obj, event)
 
-        self.side_layout.addWidget(QLabel("Image note"))
-        self.note_edit = QTextEdit()
-        self.note_edit.setMaximumHeight(80)
-        self.side_layout.addWidget(self.note_edit)
+    # ------------------------------------------------------------------ #
+    # Navigation slots
+    # ------------------------------------------------------------------ #
 
-    def _create_dataset_table(self) -> None:
-        """Add the dataset image table view to the sidebar."""
-        self.side_layout.addWidget(QLabel("Dataset Images:"))
-        self.table_view = QTableView()
-        self.table_view.setModel(self.model)
-        self.table_view.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table_view.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table_view.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table_view.verticalHeader().setVisible(False)
-        self.table_view.setAlternatingRowColors(True)
-        self.table_view.setMinimumHeight(200)
-        self.side_layout.addWidget(self.table_view)
-
-    def _create_annotation_list(self) -> None:
-        """Add the per-image annotation list widget to the sidebar."""
-        self.side_layout.addWidget(QLabel("Annotations in Current Image:"))
-        self.ann_list = QListWidget()
-        self.ann_list.setMaximumHeight(150)
-        self.side_layout.addWidget(self.ann_list)
-
-    def _create_ops_controls(self) -> None:
-        """Add Delete Selected and Sort by Area annotation operation buttons."""
-        ops = QHBoxLayout()
-        self.btn_delete = QPushButton("Delete Selected")
-        self.btn_sort = QPushButton("Sort by Area")
-        ops.addWidget(self.btn_delete)
-        ops.addWidget(self.btn_sort)
-        self.side_layout.addLayout(ops)
-
-    def _create_export_controls(self) -> None:
-        """Add export polygon/CSV and import data buttons to the sidebar."""
-        exp = QHBoxLayout()
-        self.btn_export_polys = QPushButton("Export Polygons + Data")
-        self.btn_export_csv = QPushButton("Export CSV")
-        exp.addWidget(self.btn_export_polys)
-        exp.addWidget(self.btn_export_csv)
-        self.side_layout.addLayout(exp)
-
-        self.btn_import_data = QPushButton("Import Data JSON")
-        self.side_layout.addWidget(self.btn_import_data)
-
-    # ================================================================== #
-    # Signal Wiring
-    # ================================================================== #
-
-    def _setup_connections(self) -> None:
-        """Wire all Qt signals to their corresponding slot methods."""
-        self.btn_open_folder.clicked.connect(self.on_open_folder_clicked)
-        self.btn_prev.clicked.connect(self.prev_image)
-        self.btn_next.clicked.connect(self.next_image)
-
-        self.table_view.selectionModel().selectionChanged.connect(
-            self.on_table_selection_changed
-        )
-        self.model.modelReset.connect(self.on_model_reset)
-        self.model.dataChanged.connect(self.on_model_data_changed)
-
-        # Canvas signals replace the old main_window hasattr callbacks
-        self.canvas.polygonFinished.connect(self.finish_polygon)
-        self.canvas.polygonEdited.connect(self.update_polygon_points)
-        self.canvas.polygonSelected.connect(self.on_polygon_selected)
-        self.canvas.toolCanceled.connect(lambda: self.btn_poly.setChecked(False))
-
-        self.class_combo.currentTextChanged.connect(self.update_canvas_active_color)
-        self.btn_add_class.clicked.connect(self.add_class_from_edit)
-        self.btn_color.clicked.connect(self.change_class_color)
-        self.btn_del_class.clicked.connect(self.delete_current_class)
-
-        self.inspector_edit.editingFinished.connect(self._store_inspector)
-        self.note_edit.textChanged.connect(self._store_note)
-
-        self.ann_list.itemSelectionChanged.connect(self.on_ann_list_selection)
-
-        self.btn_delete.clicked.connect(self.delete_selected_annotation)
-        self.btn_sort.clicked.connect(self.sort_by_area)
-
-        self.btn_export_polys.clicked.connect(self.on_export_polys_clicked)
-        self.btn_export_csv.clicked.connect(self.on_export_csv_clicked)
-        self.btn_import_data.clicked.connect(self.on_import_data_clicked)
-
-    # ================================================================== #
-    # Slots — Navigation
-    # ================================================================== #
-
-    def on_open_folder_clicked(self) -> None:
-        """Open a folder picker dialog and delegate loading to the I/O controller."""
-        # V1: dialog lives in the View
-        directory = QFileDialog.getExistingDirectory(
-            self, "Open image folder", os.getcwd()
-        )
-        if directory:
-            self.io_controller.load_folder(directory)
-
-    def on_model_reset(self) -> None:
-        """React to a full model reset by updating the directory label and selecting row 0."""
-        # V2: model query instead of model.state
-        image_dir = self.model.get_image_dir()
-        self.lbl_dir.setText(Path(image_dir).name if image_dir else "—")
-        if self.model.rowCount() > 0:
-            self.table_view.selectRow(0)
-            self.table_view.setFocus()
+    def _on_model_reset(self) -> None:
+        if self.dataset_model.rowCount() > 0:
+            self._load_row(0)
         else:
-            self.lbl_img.setText("0 / 0")
+            self._current_row = -1
+            self._current_bgr = None
+            self._current_ai_contours = []
+            self._selected_ai_idx = -1
+            self._active_class = ""
+            self._review_bar.setVisible(False)
+            self._ai_popup.setVisible(False)
+            self.canvas.clear_image()
+            self.right_panel.set_current_row(-1)
+            self.status_bar.set_class("")
 
-    def select_row(self, row: int) -> None:
-        """Select *row* in the dataset table without emitting :attr:`row_selection_changed`.
-
-        Used by the main window to synchronise the AnnoMate table with the
-        MicroSentryAI pane. The :attr:`_syncing` guard prevents the resulting
-        ``selectionChanged`` signal from triggering a recursive sync emission.
-
-        Args:
-            row (int): Zero-based row index to select.
-        """
-        self._syncing = True
-        self.table_view.selectRow(row)
-        self._syncing = False
-
-    def on_table_selection_changed(self, selected, deselected) -> None:
-        """Load and display the image for the newly selected dataset row.
-
-        Delegates image loading to the I/O controller and then refreshes
-        the canvas overlays, metadata fields, and image counter label.
-        Emits :attr:`row_selection_changed` unless :attr:`_syncing` is set.
-
-        Args:
-            selected: Qt selection object for newly selected indexes.
-            deselected: Qt selection object for deselected indexes.
-        """
-        indexes = self.table_view.selectionModel().selectedRows()
-        if not indexes:
-            return
-        row = indexes[0].row()
-
-        # V3: disk I/O delegated to controller
+    def _load_row(self, row: int) -> None:
         bgr = self.io_controller.load_image_for_display(row)
-        if bgr is not None:
-            self.canvas.set_image(bgr)      # V3: canvas receives data, not a path
-            self.refresh_image_view(row)
-            self.refresh_meta_fields(row)
-
-        self._update_image_counter(row)
-        if not self._syncing:
-            self.row_selection_changed.emit(row)
-
-    def next_image(self) -> None:
-        """Advance the selection to the next row, clamped at the last row."""
-        sel = self.table_view.selectionModel()
-        if not sel.hasSelection():
+        if bgr is None:
             return
-        self.table_view.selectRow(min(sel.currentIndex().row() + 1, self.model.rowCount() - 1))
+        self._current_bgr = bgr
+        self._current_row = row
+        self._review_bar.set_decision(self.dataset_model.get_review_decision(row))
+        self._review_bar.setVisible(True)
+        self._review_bar.reposition(self.canvas.size())
+        self._ai_popup.setVisible(False)
+        self._selected_ai_idx = -1
+        self.canvas.set_image(
+            bgr
+        )  # always set the original; resets zoom (expected on new image)
+        self.status_bar.set_zoom(
+            1.0
+        )  # set_image resets zoom without emitting zoom_changed
+        self._refresh_canvas_render()  # apply heatmap / overlay layer without resetting zoom
+        total = self.dataset_model.rowCount()
+        self.right_panel.set_counter(row, total)
+        self.right_panel.select_row(row)
+        self.right_panel.set_current_row(row)
 
-    def prev_image(self) -> None:
-        """Move the selection to the previous row, clamped at row 0."""
-        sel = self.table_view.selectionModel()
-        if not sel.hasSelection():
+    def _prev_image(self) -> None:
+        if self._current_row > 0:
+            self._load_row(self._current_row - 1)
+
+    def _next_image(self) -> None:
+        if self._current_row < self.dataset_model.rowCount() - 1:
+            self._load_row(self._current_row + 1)
+
+    # ------------------------------------------------------------------ #
+    # Tool slots
+    # ------------------------------------------------------------------ #
+
+    def _on_tool_selected(self, tool_name: str) -> None:
+        if tool_name == "sam_bbox":
+            self._active_tool = "sam_bbox"
+            self.canvas.set_tool(SAM_BBOX)
+            self.status_bar.set_tool("sam_bbox")
+            if not self._sam_loading:
+                self._sam_loading = True
+                variant = self.tool_palette.current_sam_variant()
+                self._sam_controller.set_variant(variant)
+                self.status_bar.set_sam_hint("Loading SAM model…")
+                self._sam_controller.ensure_loaded_async()
             return
-        self.table_view.selectRow(max(sel.currentIndex().row() - 1, 0))
 
-    def _update_image_counter(self, row: int) -> None:
-        """Update the image counter label to show ``current / total``.
+        self._active_tool = tool_name
+        self.canvas.set_tool("polygon" if tool_name == "polygon" else None)
+        self.status_bar.set_tool(tool_name)
 
-        Args:
-            row (int): Zero-based index of the currently selected image.
-        """
-        total = self.model.rowCount()
-        self.lbl_img.setText(f"{row + 1} / {total}" if total > 0 else "0 / 0")
+    def _on_tool_canceled(self) -> None:
+        self.tool_palette.deselect_all()
+        self._active_tool = ""
+        self.status_bar.set_tool("")
+        self.status_bar.set_sam_hint("")
 
-    # ================================================================== #
-    # Slots — Model observer
-    # ================================================================== #
-
-    def on_model_data_changed(self, top_left, bottom_right, roles) -> None:
-        """Refresh the canvas overlays when the model data affecting the current row changes.
-
-        Skips the refresh if a vertex or polygon drag is live to avoid
-        discarding the in-progress drag preview from ``_overlays``.
-
-        Args:
-            top_left: Top-left model index of the changed region.
-            bottom_right: Bottom-right model index of the changed region.
-            roles: List of data roles that changed (unused).
-        """
-        sel = self.table_view.selectionModel()
-        if not sel.hasSelection():
+    def _on_draw_attempted(self) -> None:
+        """Guard against drawing without a valid class; cancels the tool if missing."""
+        class_names = self.dataset_model.get_class_names()
+        if not class_names:
+            self.canvas.set_tool(None)
+            self.tool_palette.deselect_all()
+            self._active_tool = ""
+            self.status_bar.set_tool("")
+            QMessageBox.warning(
+                self, "No Classes Defined", "Add an annotation class before drawing."
+            )
             return
-        current_row = sel.currentIndex().row()
-        if top_left.row() <= current_row <= bottom_right.row():
-            # Do not replace overlays while a vertex/polygon drag is live; the
-            # drag preview lives in _overlays and would be silently discarded,
-            # causing the commit on mouseRelease to write stale coordinates.
-            if not self.canvas.is_dragging():
-                self.refresh_image_view(current_row)
+        if not self._active_class or self._active_class not in class_names:
+            self.canvas.set_tool(None)
+            self.tool_palette.deselect_all()
+            self._active_tool = ""
+            self.status_bar.set_tool("")
+            QMessageBox.warning(
+                self,
+                "No Class Selected",
+                "Select an annotation class in the panel before drawing.",
+            )
 
-    # ================================================================== #
-    # Slots — Canvas callbacks (called by ImageLabel)
-    # ================================================================== #
+    # ------------------------------------------------------------------ #
+    # Annotation slots
+    # ------------------------------------------------------------------ #
 
-    def finish_polygon(self, points: list) -> None:
-        """Add a completed polygon from the canvas to the model.
+    def _set_active_class(self, name: str) -> None:
+        self._active_class = name
+        r, g, b = self.dataset_model.get_class_color(name)
+        self.canvas.set_active_color(QColor(r, g, b))
+        self.status_bar.set_class(name)
 
-        Called when the canvas emits :attr:`~ImageLabel.polygonFinished`.
-        Does nothing if no row is selected or no class is active.
-
-        Args:
-            points (list): Sequence of ``(x, y)`` coordinate pairs in
-                original-image coordinates.
-        """
-        sel = self.table_view.selectionModel()
-        if not sel.hasSelection():
+    def _on_polygon_finished(self, pts: list) -> None:
+        if self._current_row < 0 or not pts:
             return
-        current_class = self.class_combo.currentText()
-        if not current_class:
+        class_names = self.dataset_model.get_class_names()
+        if not class_names:
             return
-        self.model.add_annotation(sel.currentIndex().row(), current_class, points)
+        target = (
+            self._active_class if self._active_class in class_names else class_names[0]
+        )
+        self.dataset_model.add_annotation(
+            self._current_row, target, pts, self.canvas.line_thickness
+        )
+        self._refresh_canvas_render()
 
-    def update_polygon_points(self, idx: int, points: list) -> None:
-        """Commit updated vertex positions for an edited polygon to the model.
-
-        Called when the canvas emits :attr:`~ImageLabel.polygonEdited`.
-
-        Args:
-            idx (int): Zero-based annotation index within the current image.
-            points (list): New sequence of ``(x, y)`` coordinate pairs.
-        """
-        sel = self.table_view.selectionModel()
-        if not sel.hasSelection():
+    def _on_polygon_edited(self, idx: int, pts: list) -> None:
+        if self._current_row < 0 or self.canvas.is_dragging():
             return
-        self.model.update_annotation_points(sel.currentIndex().row(), idx, points)
+        self.dataset_model.update_annotation_points(self._current_row, idx, pts)
 
-    def on_polygon_selected(self, idx: int) -> None:
-        """Sync the annotation list selection when the canvas selects a polygon.
+    def _on_dataset_data_changed(self, top_left, bottom_right, *_) -> None:
+        if self._current_row >= 0:
+            if top_left.row() <= self._current_row <= bottom_right.row():
+                self._review_bar.set_decision(
+                    self.dataset_model.get_review_decision(self._current_row)
+                )
+            self._refresh_canvas_render()
 
-        Called when the canvas emits :attr:`~ImageLabel.polygonSelected`.
-        Blocks annotation-list signals to avoid a feedback loop.
+    def _on_canvas_polygon_selected(self, idx: int) -> None:
+        """Sync the right panel list and slider when a polygon is clicked on the canvas."""
+        self.right_panel.annotations.select_annotation(idx)
+        self._on_annotation_selected(idx)
 
-        Args:
-            idx (int): Zero-based annotation index of the selected polygon.
-        """
-        self.ann_list.blockSignals(True)
-        self.ann_list.setCurrentRow(idx)
-        self.ann_list.blockSignals(False)
+    def _on_review_decision(self, decision) -> None:
+        if self._current_row >= 0:
+            self.dataset_model.set_review_decision(self._current_row, decision)
 
-    # ================================================================== #
-    # Slots — Class management
-    # ================================================================== #
-
-    def update_canvas_active_color(self, class_name: str) -> None:
-        """Push the color for *class_name* to the canvas draw tool.
-
-        Converts the stored ``(r, g, b)`` tuple to a
-        :class:`~PySide6.QtGui.QColor` at the last moment (V4 rule).
-
-        Args:
-            class_name (str): Class label whose color should become active.
-        """
-        # V4: tuple → QColor at the last moment, right before the draw call
-        rgb = self.model.get_class_color(class_name)
-        self.canvas.set_active_color(QColor(*rgb))
-
-    def add_class_from_edit(self) -> None:
-        """Register a new class from the name-entry field and activate the polygon tool."""
-        name = self.class_name_edit.text().strip()
-        if not name:
-            return
-        color = self._pick_next_unique_color()   # returns a tuple
-        if self.model.add_class(name, color):
-            self.class_combo.addItem(name)
-            self.class_combo.setCurrentText(name)
-            self.class_name_edit.clear()
-            self.btn_poly.setChecked(True)
-            self.update_canvas_active_color(name)
-
-    def change_class_color(self) -> None:
-        """Open a color picker and update the active class color in the model."""
-        name = self.class_combo.currentText().strip()
-        if not name:
-            return
-        # V2: read via model query; V4: convert tuple → QColor for dialog seed
-        current_rgb = self.model.get_class_color(name)
-        col = QColorDialog.getColor(QColor(*current_rgb), self)
-        if col.isValid():
-            # V4: store as tuple, not QColor
-            self.model.set_class_color(name, (col.red(), col.green(), col.blue()))
-            sel = self.table_view.selectionModel()
-            if sel.hasSelection():
-                self.refresh_image_view(sel.currentIndex().row())
-            self.update_canvas_active_color(name)
-
-    def delete_current_class(self) -> None:
-        """Remove the active class from the model and the class combo box."""
-        name = self.class_combo.currentText().strip()
-        if not name:
-            return
-        self.model.delete_class(name)
-        self.class_combo.removeItem(self.class_combo.currentIndex())
-        if self.class_combo.count() > 0:
-            self.update_canvas_active_color(self.class_combo.currentText())
-        sel = self.table_view.selectionModel()
-        if sel.hasSelection():
-            self.refresh_image_view(sel.currentIndex().row())
-
-    def _pick_next_unique_color(self) -> tuple:
-        """Return the first ``DEFAULT_CLASS_COLOR`` not already registered.
-
-        Falls back to the first default color if all defaults are exhausted.
-
-        Returns:
-            tuple: An ``(r, g, b)`` color tuple not present in the current
-                class registry, or ``DEFAULT_CLASS_COLORS[0]`` as a fallback.
-        """
-        from core.utils.constants import DEFAULT_CLASS_COLORS
-        # V2: model query; V4: already tuples
-        used = set(self.model.get_used_class_colors())
-        for cand in DEFAULT_CLASS_COLORS:
-            if cand not in used:
-                return cand
-        return DEFAULT_CLASS_COLORS[0]
-
-    def _on_polygon_tool_toggled(self, checked: bool) -> None:
-        """Activate or deactivate the polygon draw tool on the canvas.
-
-        Args:
-            checked (bool): ``True`` to activate polygon drawing; ``False``
-                to switch back to no-tool mode.
-        """
-        self.canvas.set_tool(POLYGON if checked else None)
-
-    # ================================================================== #
-    # Slots — Metadata
-    # ================================================================== #
-
-    def _store_inspector(self) -> None:
-        """Write the inspector field value to the model for the current row."""
-        sel = self.table_view.selectionModel()
-        if not sel.hasSelection():
-            return
-        self.model.set_inspector(sel.currentIndex().row(), self.inspector_edit.text().strip())
-
-    def _store_note(self) -> None:
-        """Write the note text-area value to the model for the current row."""
-        sel = self.table_view.selectionModel()
-        if not sel.hasSelection():
-            return
-        self.model.set_note(sel.currentIndex().row(), self.note_edit.toPlainText().strip())
-
-    def refresh_meta_fields(self, row: int) -> None:
-        """Populate inspector and note fields from the model for *row*.
-
-        Blocks signals on both widgets while updating to prevent feedback
-        loops from the ``editingFinished`` and ``textChanged`` slots.
-
-        Args:
-            row (int): Zero-based row index of the image to display metadata for.
-        """
-        # V2: model queries instead of state access
-        self.inspector_edit.blockSignals(True)
-        self.note_edit.blockSignals(True)
-        self.inspector_edit.setText(self.model.get_inspector(row))
-        self.note_edit.setPlainText(self.model.get_note(row))
-        self.inspector_edit.blockSignals(False)
-        self.note_edit.blockSignals(False)
-
-    # ================================================================== #
-    # Slots — Annotation list
-    # ================================================================== #
-
-    def on_ann_list_selection(self) -> None:
-        """Sync the canvas's selected polygon index when the annotation list selection changes."""
-        idxs = [i.row() for i in self.ann_list.selectedIndexes()]
-        self.canvas.selected_polygon_idx = idxs[0] if idxs else -1
+    def _on_annotation_selected(self, idx: int) -> None:
+        """Apply selection to the canvas and sync the UI slider to match the polygon's thickness."""
+        self.canvas.selected_polygon_idx = idx
         self.canvas.update()
 
-    def delete_selected_annotation(self) -> None:
-        """Delete the annotation selected in the annotation list from the model."""
-        sel = self.table_view.selectionModel()
-        if not sel.hasSelection():
+        # Read the polygon's specific thickness and update the slider
+        if idx != -1 and self._current_row >= 0:
+            annos = self.dataset_model.get_annotations(self._current_row)
+            if 0 <= idx < len(annos):
+                thick = annos[idx].get("thickness", 2.0)
+
+                # Block signals so setting the slider doesn't accidentally trigger a drawing update
+                self.tool_palette.slider_thickness.blockSignals(True)
+                self.tool_palette.slider_thickness.setValue(
+                    int(thick * 4)
+                )  # slider is 1-40
+                self.tool_palette.lbl_thickness.setText(f"{thick:.2f} px")
+                self.tool_palette.slider_thickness.blockSignals(False)
+
+                self.canvas.set_line_thickness(thick)
+
+    def _refresh_overlays(self) -> None:
+        """Rebuild canvas overlays from annotations only (no AI polygons)."""
+        current_sel = self.canvas.selected_polygon_idx
+        annos = self.dataset_model.get_annotations(self._current_row)
+        overlays = [
+            (
+                a["polygon"],
+                QColor(*self.dataset_model.get_class_color(a["category_name"])),
+                a.get("thickness", 2.0),
+            )
+            for a in annos
+        ]
+        self.canvas.selected_polygon_idx = -1
+        self.canvas.set_overlays(overlays)
+        self.canvas.clear_ai_overlays()
+        if 0 <= current_sel < len(overlays):
+            self.canvas.selected_polygon_idx = current_sel
+        else:
+            self.canvas.selected_polygon_idx = -1
+
+    def _update_canvas_overlays(self, anno_overlays: list) -> None:
+        """Push annotation overlays and current AI contours to the canvas."""
+        self.canvas.set_overlays(anno_overlays)
+        self.canvas.set_ai_overlays(self._current_ai_contours)
+
+    def _on_thickness_changed(self, thickness: float) -> None:
+        """Apply thickness based on current tool mode."""
+        # Always update the canvas so future drawing uses this thickness
+        self.canvas.set_line_thickness(thickness)
+
+        # If we are NOT actively drawing, and a polygon is selected, mutate its data
+        if self._active_tool != "polygon":
+            idx = self.canvas.selected_polygon_idx
+            if idx != -1 and self._current_row >= 0:
+                self.dataset_model.update_annotation_thickness(
+                    self._current_row, idx, thickness
+                )
+
+    # ------------------------------------------------------------------ #
+    # Microsentry toggle & rendering
+    # ------------------------------------------------------------------ #
+
+    def set_saved_model_path(self, path: str) -> None:
+        """Called by AppWindow after opening a project to record the saved model path."""
+        self._saved_model_path = path
+
+    # ------------------------------------------------------------------ #
+    # Microsentry toggle & rendering
+    # ------------------------------------------------------------------ #
+
+    def _on_microsentry_toggled(self, checked: bool) -> None:
+        self._microsentry_enabled = checked
+        if checked:
+            if (
+                self.inference_controller is not None
+                and self.inference_controller.has_model()
+            ):
+                self.right_panel.set_model_loaded(
+                    self.inference_controller.get_model_name(),
+                    self.inference_controller.get_model_path(),
+                )
+                self._start_pending_inference()
+            self.right_panel.show_microsentry_section()
+        else:
+            self.right_panel.hide_microsentry_section()
+        self._refresh_canvas_render()
+
+    def _on_load_previous_model_requested(self) -> None:
+        if self.inference_controller is None:
             return
-        selected_items = self.ann_list.selectedIndexes()
-        if selected_items:
-            self.model.delete_annotation(sel.currentIndex().row(), selected_items[0].row())
-
-    def sort_by_area(self) -> None:
-        """Sort the current image's annotations by polygon area descending."""
-        sel = self.table_view.selectionModel()
-        if sel.hasSelection():
-            self.model.sort_annotations(sel.currentIndex().row())
-
-    # ================================================================== #
-    # Slots — Export / Import  (V1: dialogs live here, not in controller)
-    # ================================================================== #
-
-    def on_export_polys_clicked(self) -> None:
-        """Open a folder picker and export polygons and metadata JSON to the chosen path."""
-        out_dir = QFileDialog.getExistingDirectory(
-            self, "Choose output folder", os.getcwd()
-        )
-        if not out_dir:
+        if not self._saved_model_path:
+            QMessageBox.information(
+                self,
+                "Load Previous Model",
+                "No model path found in the current project.\n"
+                "Open a project that was saved with a model loaded, or use 'Load New'.",
+            )
             return
-        try:
-            msg = self.io_controller.export_polygons_and_data(out_dir)
-            QMessageBox.information(self, "Export", msg)
-        except Exception as e:
-            QMessageBox.critical(self, "Export Error", str(e))
-
-    def on_export_csv_clicked(self) -> None:
-        """Open a save-file dialog and export annotation metadata as CSV."""
-        out_path, _ = QFileDialog.getSaveFileName(
-            self, "Save CSV", "metadata.csv", "CSV (*.csv)"
-        )
-        if not out_path:
+        if not os.path.isfile(self._saved_model_path):
+            QMessageBox.warning(
+                self,
+                "Load Previous Model",
+                f"The saved model file no longer exists:\n{self._saved_model_path}\n\nUse 'Load New' to browse for it.",
+            )
             return
-        try:
-            msg = self.io_controller.export_csv(out_path)
-            QMessageBox.information(self, "Export", msg)
-        except Exception as e:
-            QMessageBox.critical(self, "Export Error", str(e))
+        self._load_model_from_path(self._saved_model_path)
 
-    def on_import_data_clicked(self) -> None:
-        """Open a file picker and import annotation data from a JSON file."""
+    def _on_load_model_requested(self) -> None:
+        if self.inference_controller is None:
+            return
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open Data JSON", "", "JSON (*.json)"
+            self,
+            "Load AI Model",
+            os.getcwd(),
+            "PyTorch Model (*.pt *.pth);;All Files (*)",
         )
         if not path:
             return
+        self._load_model_from_path(path)
+
+    def _load_model_from_path(self, path: str) -> None:
+        self.status_bar.set_model_loading(True)
+        QApplication.processEvents()
         try:
-            self.io_controller.import_data_json(path)
-        except Exception as e:
-            QMessageBox.critical(self, "Import Error", str(e))
+            name = self.inference_controller.load_model(path)
+        except Exception as exc:
+            self.status_bar.set_model_loading(False)
+            QMessageBox.critical(self, "Load Model", f"Could not load model:\n{exc}")
+            return
+        self.status_bar.set_model_loading(False)
+        # Clear score maps from any previous model so the new model re-processes
+        # everything rather than reusing stale heatmaps.
+        self.inference_model.clear()
+        self._refresh_canvas_render()
+        self.right_panel.set_model_loaded(name, path)
+        self._start_pending_inference()
+
+    def _start_pending_inference(self) -> None:
+        if (
+            self.inference_controller is None
+            or not self.inference_controller.has_model()
+        ):
+            return
+        total = self.dataset_model.rowCount()
+        paths = [
+            self.dataset_model.get_image_path(i)
+            for i in range(total)
+            if not self.inference_model.is_processed(
+                self.dataset_model.get_image_path(i)
+            )
+        ]
+        if paths:
+            self.inference_controller.start_batch_inference(paths)
+
+    def _refresh_canvas_render(self) -> None:
+        """Update heatmap layer and polygon overlays without resetting zoom or pan.
+
+        Never calls canvas.set_image — that lives exclusively in _load_row so
+        that zoom only resets when the user navigates to a new image.
+        """
+        if self._current_row < 0 or self._current_bgr is None:
             return
 
-        # Re-sync class combo after import (class list may have changed)
-        # V2: model query
-        self.class_combo.blockSignals(True)
-        self.class_combo.clear()
-        self.class_combo.addItems(self.model.get_class_names())
-        self.class_combo.blockSignals(False)
-        if self.class_combo.count() > 0:
-            self.update_canvas_active_color(self.class_combo.currentText())
+        ms_active = (
+            self._microsentry_enabled
+            and self.inference_controller is not None
+            and self.inference_controller.has_model()
+        )
 
-    # ================================================================== #
-    # View refresh helpers
-    # ================================================================== #
+        if not ms_active:
+            self.canvas.clear_heatmap_layer()
+            self._refresh_overlays()
+            return
 
-    def refresh_image_view(self, row: int) -> None:
-        """Refresh the annotation list and canvas overlays from the model for *row*.
+        path = self.dataset_model.get_image_path(self._current_row)
+        if not self.inference_model.is_processed(path):
+            self.canvas.clear_heatmap_layer()
+            self._refresh_overlays()
+            return
 
-        Reads annotations via the model query API (V2 rule), converts each
-        class color tuple to :class:`~PySide6.QtGui.QColor` at the draw
-        boundary (V4 rule), and pushes the overlay list to the canvas.
+        ms = self.right_panel.get_microsentry_settings()
+        score_map = self.inference_model.get_score_map(path)
 
-        Args:
-            row (int): Zero-based row index of the image to refresh.
-        """
-        # V2: model query — never touches .state
-        annos = self.model.get_annotations(row)
+        # Smooth the score map with the configured sigma
+        s = score_map.astype(np.float32)
+        sigma = ms["sigma"]
+        if sigma > 0:
+            ksize = int(sigma * 6 + 1) | 1  # ensure odd
+            s = cv2.GaussianBlur(s, (ksize, ksize), sigma)
 
-        self.ann_list.blockSignals(True)
-        self.ann_list.clear()
-        for a in annos:
-            self.ann_list.addItem(f"{a['category_name']} — {len(a['polygon'])} pts")
-        self.ann_list.blockSignals(False)
+        # Heatmap layer — drawn as a semi-transparent QPixmap over the original
+        if ms["heatmap_enabled"]:
+            self.canvas.set_heatmap_layer(s, ms["alpha"], ms["heat_min"])
+        else:
+            self.canvas.clear_heatmap_layer()
 
-        # V4: tuple → QColor right at the draw boundary
-        overlays = [
-            (a["polygon"], QColor(*self.model.get_class_color(a["category_name"])))
+        # Annotation overlays are always shown
+        annos = self.dataset_model.get_annotations(self._current_row)
+        anno_overlays = [
+            (
+                a["polygon"],
+                QColor(*self.dataset_model.get_class_color(a["category_name"])),
+                a.get("thickness", 2.0),
+            )
             for a in annos
         ]
-        self.canvas.set_overlays(overlays)
 
-    # ================================================================== #
+        # AI segmentation overlays — computed fresh, stored for per-polygon accept/reject
+        if ms["seg_enabled"]:
+            orig_h, orig_w = self._current_bgr.shape[:2]
+            self._current_ai_contours = self.inference_controller.compute_segmentation(
+                s, ms["seg_pct"], ms["epsilon"], orig_w, orig_h
+            )
+        else:
+            self._current_ai_contours = []
+
+        self._ai_popup.setVisible(False)
+        self._selected_ai_idx = -1
+        self.canvas.selected_polygon_idx = -1
+        self._update_canvas_overlays(anno_overlays)
+
+    # ------------------------------------------------------------------ #
+    # Inference signal slots
+    # ------------------------------------------------------------------ #
+
+    def _on_inference_result(self, path: str, score_map) -> None:
+        self.inference_model.set_score_map(path, score_map)
+        row = self._row_for_path(path)
+        if row >= 0:
+            self.right_panel.navigator_set_processed(row, True)
+        if row == self._current_row and self._microsentry_enabled:
+            self._refresh_canvas_render()
+
+    def _on_inference_progress(self, done: int) -> None:
+        total = self.dataset_model.rowCount()
+        self.status_bar.set_inference_progress(done, total)
+
+    def _on_inference_batch_done(self) -> None:
+        self.status_bar.clear_inference_progress()
+        self.right_panel.refresh_navigator_processed()
+
+    def _on_ai_polygon_clicked(self, idx: int, view_pos: QPointF) -> None:
+        self._selected_ai_idx = idx
+        if idx == -1:
+            self._ai_popup.setVisible(False)
+            return
+        class_names = self.dataset_model.get_class_names()
+        if not class_names:
+            self._ai_popup.setVisible(False)
+            return
+        self._ai_popup.set_classes(class_names, self._active_class)
+        bbox = self.canvas.get_ai_polygon_view_rect(idx)
+        self._ai_popup.show_at_polygon(bbox)
+
+    def _on_accept_single_ai(self) -> None:
+        idx = self._selected_ai_idx
+        if idx < 0 or idx >= len(self._current_ai_contours):
+            return
+        pts = self._current_ai_contours[idx]
+        if len(pts) >= 3:
+            target = self._ai_popup.current_class()
+            if not target:
+                class_names = self.dataset_model.get_class_names()
+                target = (
+                    self._active_class
+                    if self._active_class in class_names
+                    else (class_names[0] if class_names else "")
+                )
+            if target:
+                self.dataset_model.add_annotation(self._current_row, target, pts)
+        del self._current_ai_contours[idx]
+        self._selected_ai_idx = -1
+        self._ai_popup.setVisible(False)
+        self._push_overlays_after_edit()
+
+    def _push_overlays_after_edit(self) -> None:
+        """Refresh canvas overlays from current annotations + remaining AI contours."""
+        if self._current_row < 0:
+            return
+        annos = self.dataset_model.get_annotations(self._current_row)
+        anno_overlays = [
+            (
+                a["polygon"],
+                QColor(*self.dataset_model.get_class_color(a["category_name"])),
+                a.get("thickness", 2.0),
+            )
+            for a in annos
+        ]
+        self._update_canvas_overlays(anno_overlays)
+
+    def _on_accept_ai_polygons(self) -> None:
+        """Add all current AI contours as annotations on the active class."""
+        if self._current_row < 0 or not self._current_ai_contours:
+            return
+        class_names = self.dataset_model.get_class_names()
+        if not class_names:
+            return
+        target = (
+            self._active_class if self._active_class in class_names else class_names[0]
+        )
+        for pts in self._current_ai_contours:
+            if len(pts) >= 3:
+                self.dataset_model.add_annotation(self._current_row, target, pts)
+        self._current_ai_contours = []
+        self._selected_ai_idx = -1
+        self._ai_popup.setVisible(False)
+        self._refresh_canvas_render()
+
+    def _row_for_path(self, path: str) -> int:
+        for i in range(self.dataset_model.rowCount()):
+            if self.dataset_model.get_image_path(i) == path:
+                return i
+        return -1
+
+    # ------------------------------------------------------------------ #
     # Hotkeys
-    # ================================================================== #
+    # ------------------------------------------------------------------ #
 
     def keyPressEvent(self, event) -> None:
-        """Scale the selected polygon with ``[`` (shrink) and ``]`` (grow).
+        """Handle annotation hotkeys.
+
+        - ``P``: toggle polygon tool
+        - ``Delete``: delete the selected annotation
 
         Args:
-            event: The key press event passed by Qt.
+            event: The key press event.
         """
-        if event.key() == Qt.Key_BracketLeft:
-            self._scale_selected_polygon(0.9)
-        elif event.key() == Qt.Key_BracketRight:
-            self._scale_selected_polygon(1.1)
+        if event.key() == Qt.Key_P:
+            self.tool_palette.toggle_polygon()
+        elif event.key() == Qt.Key_S:
+            self.tool_palette.toggle_sam()
+        elif event.key() == Qt.Key_Delete:
+            self._delete_selected_annotation()
         super().keyPressEvent(event)
 
-    def _scale_selected_polygon(self, factor: float) -> None:
-        """Scale the currently selected polygon by *factor* about its centroid.
-
-        Reads the polygon from the model, applies
-        :func:`~core.utils.geometry.scale_polygon_about_center`, and writes
-        the result back via the model command API. Does nothing when no
-        polygon is selected or the annotation list is empty.
-
-        Args:
-            factor (float): Scaling multiplier (e.g. ``0.9`` to shrink,
-                ``1.1`` to grow).
-        """
+    def _delete_selected_annotation(self) -> None:
         idx = self.canvas.selected_polygon_idx
-        sel = self.table_view.selectionModel()
-        if idx == -1 or not sel.hasSelection():
+        if idx != -1 and self._current_row >= 0:
+            self.dataset_model.delete_annotation(self._current_row, idx)
+
+    # ------------------------------------------------------------------ #
+    # SAM tool slots
+    # ------------------------------------------------------------------ #
+
+    def _on_sam_variant_changed(self, variant: str) -> None:
+        self._sam_controller.set_variant(variant)
+        self._sam_loading = False
+        self.tool_palette.sam_status_lbl.setText("Model: not loaded")
+        self.tool_palette.sam_status_lbl.setStyleSheet(
+            "color: grey; font-style: italic;"
+        )
+
+    def _on_sam_loading_done(self) -> None:
+        self._sam_loading = False
+        display_name = self.tool_palette.sam_variant_combo.currentText()
+        self.tool_palette.sam_status_lbl.setText(f"Ready: {display_name}")
+        self.tool_palette.sam_status_lbl.setStyleSheet(
+            "color: green; font-style: normal;"
+        )
+        self.status_bar.set_sam_hint(f"Ready: {display_name}  ·  draw bbox to segment")
+
+    def _on_sam_loading_failed(self, msg: str) -> None:
+        self._sam_loading = False
+        self.tool_palette.deselect_all()
+        self._active_tool = ""
+        self.canvas.set_tool(None)
+        self.status_bar.set_tool("")
+        self.status_bar.set_sam_hint("")
+        self.tool_palette.sam_status_lbl.setText("Load failed")
+        self.tool_palette.sam_status_lbl.setStyleSheet(
+            "color: red; font-style: normal;"
+        )
+        QMessageBox.critical(self, "SAM Load Error", f"Could not load model:\n{msg}")
+
+    def _on_sam_bbox_drawn(self, x1: float, y1: float, x2: float, y2: float) -> None:
+        if self._current_row < 0 or self._current_bgr is None:
             return
-        row = sel.currentIndex().row()
-        # V2: model query
-        annos = self.model.get_annotations(row)
-        if not (0 <= idx < len(annos)):
-            return
-        pts = annos[idx]["polygon"]
+        self.canvas.setCursor(Qt.WaitCursor)
+        self.status_bar.set_sam_hint("Running SAM…")
+        self._sam_controller.run_inference(self._current_bgr, (x1, y1, x2, y2))
+
+    def _on_sam_result_ready(self, pts: list, confidence: float) -> None:
+        self.canvas.setCursor(Qt.CrossCursor)
         if not pts:
+            self.status_bar.set_sam_hint("No mask found — try a larger bbox")
             return
-        new_pts = scale_polygon_about_center(pts, factor)
-        self.model.update_annotation_points(row, idx, new_pts)
+        self.canvas.set_sam_ghost(pts, confidence)
+        self.status_bar.set_sam_hint(
+            f"conf={confidence:.2f}  ·  Enter=accept  ·  Esc=cancel"
+        )
 
-    # ================================================================== #
-    # Cross-pane API — called by main.py polygon transfer handler
-    # ================================================================== #
-
-    def receive_polygons(self, polygons: list, class_name: str) -> None:
-        """Add polygons transferred from the MicroSentryAI pane to the current image.
-
-        Called by the main window's polygon-transfer handler. Iterates over
-        each polygon in *polygons* and adds it as a new annotation, then
-        refreshes the canvas view.
-
-        Args:
-            polygons (list): List of polygon point lists, each a sequence of
-                ``(x, y)`` coordinate pairs in original-image coordinates.
-            class_name (str): Class label to assign to every transferred polygon.
-        """
-        sel = self.table_view.selectionModel()
-        if not sel.hasSelection():
-            return
-        row = sel.currentIndex().row()
-        for pts in polygons:
-            self.model.add_annotation(row, class_name, pts)
-        self.refresh_image_view(row)
+    def _on_sam_inference_failed(self, msg: str) -> None:
+        self.canvas.setCursor(Qt.CrossCursor)
+        self.status_bar.set_sam_hint(f"Inference error — {msg}")

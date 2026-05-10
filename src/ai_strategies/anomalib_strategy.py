@@ -8,6 +8,7 @@ No Qt dependencies.
 
 import os
 import io
+import time
 import pickle
 import pathlib
 import logging
@@ -15,12 +16,12 @@ import platform
 from pathlib import Path
 from typing import Tuple, Optional
 
-os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-
 import numpy as np
 import torch
 from anomalib.deploy import TorchInferencer
 import cv2
+
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
 logger = logging.getLogger("MicroSentryAI.AnomalibStrategy")
 
@@ -28,6 +29,7 @@ logger = logging.getLogger("MicroSentryAI.AnomalibStrategy")
 # ---------------------------------------------------------------------------
 # Dynamic Unpickler — bypasses missing classes in torch.load
 # ---------------------------------------------------------------------------
+
 
 class DummyMeta(type):
     """Metaclass that returns :class:`DummyClass` for any unknown class attribute.
@@ -191,6 +193,7 @@ class DynamicPickleModule:
 
 # ---------------------------------------------------------------------------
 
+
 class AnomalibStrategy:
     """Strategy for PyTorch (``.pt``, ``.ckpt``) anomaly detection models.
 
@@ -237,6 +240,64 @@ class AnomalibStrategy:
         self.device = device_code.lower()
         logger.info("Target device set to: %s", self.device)
 
+    def _log_hardware_environment(self) -> None:
+        """Log a full hardware availability report to help diagnose device selection."""
+        logger.info("── Hardware Environment ─────────────────────────────────")
+        logger.info("  Platform   : %s %s", platform.system(), platform.release())
+        logger.info("  Python     : %s", platform.python_version())
+        logger.info("  PyTorch    : %s", torch.__version__)
+
+        # CUDA
+        cuda_available = torch.cuda.is_available()
+        logger.info(
+            "  CUDA       : %s", "available" if cuda_available else "not available"
+        )
+        if cuda_available:
+            logger.info("    CUDA toolkit : %s", torch.version.cuda)
+            device_count = torch.cuda.device_count()
+            logger.info("    GPU count    : %d", device_count)
+            for i in range(device_count):
+                name = torch.cuda.get_device_name(i)
+                props = torch.cuda.get_device_properties(i)
+                vram_gb = props.total_memory / (1024**3)
+                logger.info("    GPU %d        : %s (%.1f GB VRAM)", i, name, vram_gb)
+        else:
+            if not torch.cuda.is_available():
+                # Distinguish: no NVIDIA driver vs CUDA build missing
+                cuda_built = torch.version.cuda is not None
+                if cuda_built:
+                    logger.info(
+                        "    (PyTorch was built with CUDA %s but no NVIDIA GPU/driver found)",
+                        torch.version.cuda,
+                    )
+                else:
+                    logger.info("    (PyTorch was not built with CUDA support)")
+
+        # MPS
+        mps_built = hasattr(torch.backends, "mps")
+        if mps_built:
+            mps_available = torch.backends.mps.is_available()
+            logger.info(
+                "  MPS        : %s", "available" if mps_available else "not available"
+            )
+            if not mps_available:
+                mps_built_flag = torch.backends.mps.is_built()
+                if not mps_built_flag:
+                    logger.info("    (PyTorch was not built with MPS support)")
+                else:
+                    logger.info(
+                        "    (MPS built but not available — requires macOS 12.3+ with Apple GPU)"
+                    )
+        else:
+            logger.info(
+                "  MPS        : not available (PyTorch < 1.12 — no MPS backend)"
+            )
+
+        logger.info(
+            "  CPU        : always available (%d logical cores)", os.cpu_count() or 0
+        )
+        logger.info("─────────────────────────────────────────────────────────")
+
     def _resolve_device(self) -> str:
         """Resolve the effective compute device, applying auto-detection if needed.
 
@@ -245,12 +306,23 @@ class AnomalibStrategy:
                 ``"cpu"`` when :attr:`device` is ``"auto"``; otherwise
                 returns :attr:`device` unchanged.
         """
+        self._log_hardware_environment()
+
         if self.device != "auto":
+            logger.info(
+                "Device selection: using explicitly requested device '%s'", self.device
+            )
             return self.device
+
         if torch.cuda.is_available():
+            logger.info("Device selection: auto → CUDA (NVIDIA GPU detected)")
             return "cuda"
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            logger.info(
+                "Device selection: auto → MPS (Apple GPU detected, CUDA not available)"
+            )
             return "mps"
+        logger.info("Device selection: auto → CPU (no GPU acceleration available)")
         return "cpu"
 
     def load_from_folder(self, folder_path: str) -> None:
@@ -285,37 +357,74 @@ class AnomalibStrategy:
         self.torch_inferencer = None
         self.raw_model = None
 
+        t_total = time.perf_counter()
+
         try:
             os.environ["TRUST_REMOTE_CODE"] = "1"
 
             if path.suffix not in (".pt", ".ckpt"):
-                raise ValueError(f"Unsupported file type: {path.suffix}. Expected .pt or .ckpt")
+                raise ValueError(
+                    f"Unsupported file type: {path.suffix}. Expected .pt or .ckpt"
+                )
 
             self.model_type = "torch"
             resolved_device = self._resolve_device()
-            final_device = resolved_device.upper()
+            if resolved_device == "cuda":
+                try:
+                    gpu_name = torch.cuda.get_device_name(0)
+                    final_device = f"CUDA ({gpu_name})"
+                except Exception:
+                    final_device = "CUDA"
+            elif resolved_device == "mps":
+                final_device = "MPS (Apple Silicon)"
+            else:
+                final_device = "CPU"
 
             import functools
+
             original_torch_load = torch.load
             original_posix_path = pathlib.PosixPath
 
             try:
                 # Attempt 1: Anomalib TorchInferencer (monkey-patch forces CPU deserialisation)
                 try:
-                    torch.load = functools.partial(original_torch_load, map_location="cpu")
+                    torch.load = functools.partial(
+                        original_torch_load, map_location="cpu"
+                    )
                     if platform.system() == "Windows":
                         pathlib.PosixPath = pathlib.WindowsPath
 
                     if resolved_device == "mps":
                         logger.debug("Applying MPS shim: initialising on CPU first.")
+                        t_inferencer = time.perf_counter()
                         self.torch_inferencer = TorchInferencer(path=path, device="cpu")
+                        logger.info(
+                            "Load phase: TorchInferencer init — %.2fs",
+                            time.perf_counter() - t_inferencer,
+                        )
+
+                        t_mps = time.perf_counter()
                         mps_device = torch.device("mps")
                         if hasattr(self.torch_inferencer, "model"):
-                            self.torch_inferencer.model = self.torch_inferencer.model.to(mps_device)
+                            self.torch_inferencer.model = (
+                                self.torch_inferencer.model.to(mps_device)
+                            )
                         self.torch_inferencer.device = mps_device
+                        logger.info(
+                            "Load phase: MPS device move — %.2fs",
+                            time.perf_counter() - t_mps,
+                        )
+
                         final_device = "MPS (Apple Silicon)"
                     else:
-                        self.torch_inferencer = TorchInferencer(path=path, device=resolved_device)
+                        t_inferencer = time.perf_counter()
+                        self.torch_inferencer = TorchInferencer(
+                            path=path, device=resolved_device
+                        )
+                        logger.info(
+                            "Load phase: TorchInferencer init — %.2fs",
+                            time.perf_counter() - t_inferencer,
+                        )
 
                     self.model_name = f"Anomalib (Torch) [{final_device}]"
                     logger.info("Loaded %s via TorchInferencer", self.model_name)
@@ -326,11 +435,22 @@ class AnomalibStrategy:
 
             except Exception as anomalib_err:
                 # Attempt 2: Raw PyTorch fallback with DynamicUnpickler
-                logger.warning("TorchInferencer rejected the model (%s). Trying raw fallback.", anomalib_err)
+                logger.warning(
+                    "TorchInferencer rejected the model (%s). Trying raw fallback.",
+                    anomalib_err,
+                )
                 self.torch_inferencer = None
 
-                device_obj = torch.device(resolved_device if resolved_device != "mps" else "cpu")
-                loaded_data = torch.load(path, map_location=device_obj, pickle_module=DynamicPickleModule)
+                device_obj = torch.device(
+                    resolved_device if resolved_device != "mps" else "cpu"
+                )
+                t_raw = time.perf_counter()
+                loaded_data = torch.load(
+                    path, map_location=device_obj, pickle_module=DynamicPickleModule
+                )
+                logger.info(
+                    "Load phase: raw torch.load — %.2fs", time.perf_counter() - t_raw
+                )
 
                 if isinstance(loaded_data, dict):
                     if "state_dict" in loaded_data and "model" not in loaded_data:
@@ -341,7 +461,9 @@ class AnomalibStrategy:
                     elif "model" in loaded_data:
                         self.raw_model = loaded_data["model"]
                     else:
-                        raise ValueError("Loaded dict does not contain a recognisable model graph.")
+                        raise ValueError(
+                            "Loaded dict does not contain a recognisable model graph."
+                        )
                 else:
                     self.raw_model = loaded_data
 
@@ -350,13 +472,20 @@ class AnomalibStrategy:
 
                 if resolved_device == "mps":
                     try:
+                        t_mps = time.perf_counter()
                         self.raw_model = self.raw_model.to(torch.device("mps"))
+                        logger.info(
+                            "Load phase: MPS device move — %.2fs",
+                            time.perf_counter() - t_mps,
+                        )
                         final_device = "MPS (Apple Silicon)"
                     except Exception as mps_err:
                         logger.debug("Failed to push raw model to MPS: %s", mps_err)
 
-                self.model_name = f"Raw PyTorch Model [{final_device}]"
+                self.model_name = f"PyTorch Checkpoint [{final_device}]"
                 logger.info("Loaded %s via raw torch.load", self.model_name)
+
+            logger.info("Load total — %.2fs", time.perf_counter() - t_total)
 
         except Exception as e:
             logger.error("Critical failure loading model: %s", e)
@@ -473,7 +602,11 @@ class AnomalibStrategy:
             if isinstance(output, tuple):
                 for item in output:
                     if isinstance(item, torch.Tensor):
-                        if item.ndim >= 2 and item.numel() > 1 and item.is_floating_point():
+                        if (
+                            item.ndim >= 2
+                            and item.numel() > 1
+                            and item.is_floating_point()
+                        ):
                             heatmap = item.squeeze().cpu().numpy()
                         elif item.numel() == 1:
                             score = float(item.cpu().item())

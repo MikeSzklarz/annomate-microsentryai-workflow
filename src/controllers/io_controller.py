@@ -58,12 +58,12 @@ class IOController:
             directory (str): Absolute path to the folder to scan.
         """
         logger.debug("Scanning directory for images: %s", directory)
-        
+
         exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
         files = sorted(
             f for f in os.listdir(directory) if Path(f).suffix.lower() in exts
         )
-        
+
         logger.debug("Found %d valid images in folder.", len(files))
         self.model.load_folder(directory, files)
 
@@ -108,7 +108,7 @@ class IOController:
             raise RuntimeError("No images loaded.")
 
         logger.debug("Starting polygon export to: %s", out_dir)
-        
+
         out_path = Path(out_dir)
         tray_name = Path(state.image_dir).name if state.image_dir else "tray"
         timestamp = datetime.now().strftime("%m-%d-%y-%H-%M-%S")
@@ -135,6 +135,7 @@ class IOController:
                     {
                         "class": a["category_name"],
                         "polygon": [(float(x), float(y)) for (x, y) in a["polygon"]],
+                        "thickness": a.get("thickness", 2.0),
                     }
                     for a in anns
                 ],
@@ -171,7 +172,9 @@ class IOController:
         with open(data_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
 
-        logger.debug("Successfully exported %d overlay images and data JSON.", saved_count)
+        logger.debug(
+            "Successfully exported %d overlay images and data JSON.", saved_count
+        )
         return f"Saved {saved_count} image(s) + data JSON:\n{data_path}"
 
     def export_csv(self, out_path: str) -> str:
@@ -206,9 +209,9 @@ class IOController:
                     "image_name": name,
                     "inspector": state.inspectors.get(name, "") if reviewed else "",
                     "note": state.notes.get(name, "") if reviewed else "",
-                    "classes": (
-                        ", ".join(unique_classes) if unique_classes else "good"
-                    ) if reviewed else "",
+                    "classes": (", ".join(unique_classes) if unique_classes else "good")
+                    if reviewed
+                    else "",
                 }
             )
 
@@ -220,6 +223,60 @@ class IOController:
             writer.writerows(rows)
 
         return f"CSV saved to:\n{out_path}"
+
+    def export_binary_masks(self, out_dir: str) -> str:
+        """Write binary mask PNGs to *out_dir* from in-memory annotations.
+
+        For each image that has at least one polygon annotation, renders all
+        polygons onto a black canvas as white-filled regions and writes the
+        result as a PNG. Images without annotations are skipped — they
+        represent defect-free ("good") samples that need no mask.
+
+        Args:
+            out_dir (str): Absolute path to the output directory.
+
+        Returns:
+            str: Human-readable success message with the count saved.
+
+        Raises:
+            RuntimeError: If no images are currently loaded in the model.
+        """
+        state = self.model.state
+        if not state.image_files:
+            raise RuntimeError("No images loaded.")
+
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        saved = 0
+        for name in state.image_files:
+            anns = state.annotations.get(name, [])
+            if not anns:
+                continue
+
+            src = Path(state.image_dir) / name
+            if not src.exists():
+                logger.warning("Image not found on disk, skipping: %s", src)
+                continue
+
+            img = cv2.imread(str(src), cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                logger.warning("Could not read image: %s", src)
+                continue
+
+            h, w = img.shape[:2]
+            mask = np.zeros((h, w), dtype=np.uint8)
+
+            for a in anns:
+                pts = np.array(a["polygon"], dtype=np.int32).reshape((-1, 1, 2))
+                cv2.fillPoly(mask, [pts], 255)
+
+            stem = Path(name).stem
+            cv2.imwrite(str(out_path / f"{stem}.png"), mask)
+            saved += 1
+
+        logger.debug("Exported %d binary mask(s) to: %s", saved, out_dir)
+        return f"Saved {saved} binary mask(s) to:\n{out_dir}"
 
     # ------------------------------------------------------------------ #
     # Import
@@ -283,13 +340,19 @@ class IOController:
                 if isinstance(raw, (list, tuple)) and len(raw) == 3:
                     state.class_colors[name] = (int(raw[0]), int(raw[1]), int(raw[2]))
                 else:
-                    state.class_colors[name] = DEFAULT_CLASS_COLORS[i % len(DEFAULT_CLASS_COLORS)]
+                    state.class_colors[name] = DEFAULT_CLASS_COLORS[
+                        i % len(DEFAULT_CLASS_COLORS)
+                    ]
 
         for name, info in images_node.items():
             state.inspectors[name] = info.get("inspector", "")
             state.notes[name] = info.get("note", "")
             recs = [
-                {"category_name": a.get("class", ""), "polygon": a.get("polygon", [])}
+                {
+                    "category_name": a.get("class", ""),
+                    "polygon": a.get("polygon", []),
+                    "thickness": a.get("thickness", 2.0),
+                }
                 for a in info.get("annotations", [])
             ]
             if recs:
@@ -318,7 +381,9 @@ class IOController:
                 if name not in state.class_names:
                     idx = len(state.class_names)
                     state.class_names.append(name)
-                    state.class_colors[name] = DEFAULT_CLASS_COLORS[idx % len(DEFAULT_CLASS_COLORS)]
+                    state.class_colors[name] = DEFAULT_CLASS_COLORS[
+                        idx % len(DEFAULT_CLASS_COLORS)
+                    ]
 
         img_id_map = {img["id"]: img["file_name"] for img in images_node}
 
