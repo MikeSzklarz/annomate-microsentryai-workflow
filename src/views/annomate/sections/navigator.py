@@ -1,5 +1,5 @@
 from PySide6.QtCore import QItemSelectionModel, Qt, Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QAction, QColor, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMenu,
     QSizePolicy,
     QStyledItemDelegate,
     QStyle,
@@ -35,6 +36,12 @@ _DECISION_W = 82
 _IMG_MIN_W = 90
 _SCORE_W = 62
 _CLASS_W = 76
+_OPTIONAL_COLUMNS = (
+    (NavigatorColumns.ANNOTS, "Annots"),
+    (NavigatorColumns.DECISION, "Decision"),
+    (NavigatorColumns.SCORE, "Score"),
+    (NavigatorColumns.CLASS, "Class"),
+)
 
 
 class _StatusDotDelegate(QStyledItemDelegate):
@@ -78,6 +85,7 @@ class DataNavigatorSection(QWidget):
         self.inference_model = inference_model
         self._selected_row: int = -1
         self._microsentry_mode: bool = False
+        self._column_actions: dict[int, QAction] = {}
 
         self._table_model = NavigatorTableModel(dataset_model, inference_model, self)
         self._proxy = NavigatorSortProxyModel(self)
@@ -121,6 +129,15 @@ class DataNavigatorSection(QWidget):
         nav_h.addSpacing(4)
         nav_h.addWidget(_dot(_COLOR_REVIEWED))
         nav_h.addWidget(QLabel("Reviewed"))
+        nav_h.addSpacing(4)
+
+        self._btn_columns = QToolButton()
+        self._btn_columns.setText("Columns")
+        self._btn_columns.setToolTip("Choose navigator columns")
+        self._btn_columns.setPopupMode(QToolButton.InstantPopup)
+        self._btn_columns.setMenu(self._build_column_menu())
+        nav_h.addWidget(self._btn_columns)
+
         layout.addWidget(nav_row)
 
         self._table = QTableView()
@@ -187,6 +204,19 @@ class DataNavigatorSection(QWidget):
 
         layout.addWidget(self._table)
 
+    def _build_column_menu(self) -> QMenu:
+        menu = QMenu(self)
+        for column, label in _OPTIONAL_COLUMNS:
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(True)
+            action.toggled.connect(
+                lambda checked, col=column: self._on_column_toggled(col, checked)
+            )
+            menu.addAction(action)
+            self._column_actions[column] = action
+        return menu
+
     def _on_model_reset(self) -> None:
         has_images = self.dataset_model.rowCount() > 0
         self._btn_prev.setVisible(has_images)
@@ -198,7 +228,7 @@ class DataNavigatorSection(QWidget):
             self._lbl_counter.setText(f"{total} image{'s' if total != 1 else ''} loaded")
         else:
             self._lbl_counter.setText("No images loaded")
-        self._sync_microsentry_columns()
+        self._sync_visible_columns()
 
     def _on_proxy_order_changed(self, *args) -> None:
         if self._selected_row >= 0:
@@ -227,10 +257,39 @@ class DataNavigatorSection(QWidget):
         proxy_index = self._proxy.mapFromSource(source_index)
         return proxy_index.row() if proxy_index.isValid() else -1
 
-    def _sync_microsentry_columns(self) -> None:
-        visible = self._microsentry_mode
-        self._table.setColumnHidden(NavigatorColumns.SCORE, not visible)
-        self._table.setColumnHidden(NavigatorColumns.CLASS, not visible)
+    def _on_column_toggled(self, column: int, checked: bool) -> None:
+        if not checked and self._table.horizontalHeader().sortIndicatorSection() == column:
+            self._table.sortByColumn(NavigatorColumns.IMG_ID, Qt.AscendingOrder)
+        self._sync_visible_columns()
+
+    def _column_enabled(self, column: int) -> bool:
+        action = self._column_actions.get(column)
+        return True if action is None else action.isChecked()
+
+    def _sync_visible_columns(self) -> None:
+        self._table.setColumnHidden(NavigatorColumns.STATUS, False)
+        self._table.setColumnHidden(NavigatorColumns.IMG_ID, False)
+        self._table.setColumnHidden(
+            NavigatorColumns.ANNOTS, not self._column_enabled(NavigatorColumns.ANNOTS)
+        )
+        self._table.setColumnHidden(
+            NavigatorColumns.DECISION,
+            not self._column_enabled(NavigatorColumns.DECISION),
+        )
+        self._table.setColumnHidden(
+            NavigatorColumns.SCORE,
+            not (
+                self._microsentry_mode
+                and self._column_enabled(NavigatorColumns.SCORE)
+            ),
+        )
+        self._table.setColumnHidden(
+            NavigatorColumns.CLASS,
+            not (
+                self._microsentry_mode
+                and self._column_enabled(NavigatorColumns.CLASS)
+            ),
+        )
 
     def _update_counter(self, source_row: int) -> None:
         total = self.dataset_model.rowCount()
@@ -279,7 +338,7 @@ class DataNavigatorSection(QWidget):
     def set_microsentry_mode(self, enabled: bool) -> None:
         """Show or hide the Score and Class columns across the navigator."""
         self._microsentry_mode = enabled
-        self._sync_microsentry_columns()
+        self._sync_visible_columns()
         self._table_model.refresh_inference()
         if self._selected_row >= 0:
             self.select_row(self._selected_row)
