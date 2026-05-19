@@ -155,6 +155,10 @@ class RightPanel(QWidget):
         """Update the image position counter in the navigator."""
         self.navigator.set_counter(current, total)
 
+    def navigator_adjacent_source_row(self, current_source_row: int, step: int) -> int:
+        """Return the navigator-adjacent source row in current visible order."""
+        return self.navigator.adjacent_source_row(current_source_row, step)
+
     def set_current_row(self, row: int) -> None:
         """Update per-image counts, annotations list, and metadata for the new image."""
         self.classes.set_current_row(row)

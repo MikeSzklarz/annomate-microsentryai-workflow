@@ -429,12 +429,14 @@ class AnnoMateWindow(QWidget):
         self.right_panel.set_current_row(row)
 
     def _prev_image(self) -> None:
-        if self._current_row > 0:
-            self._load_row(self._current_row - 1)
+        row = self.right_panel.navigator_adjacent_source_row(self._current_row, -1)
+        if row >= 0:
+            self._load_row(row)
 
     def _next_image(self) -> None:
-        if self._current_row < self.dataset_model.rowCount() - 1:
-            self._load_row(self._current_row + 1)
+        row = self.right_panel.navigator_adjacent_source_row(self._current_row, 1)
+        if row >= 0:
+            self._load_row(row)
 
     # ------------------------------------------------------------------ #
     # Tool slots
