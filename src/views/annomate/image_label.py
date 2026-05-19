@@ -337,11 +337,9 @@ class ImageLabel(QLabel):
                 shape if shape in ("rectangle", "circle") else "rectangle"
             )
         if width is not None:
-            max_w = img_w if img_w is not None else max(1, width)
-            self._center_crop_width = max(1, min(int(width), max_w))
+            self._center_crop_width = max(1, int(width))
         if height is not None:
-            max_h = img_h if img_h is not None else max(1, height)
-            self._center_crop_height = max(1, min(int(height), max_h))
+            self._center_crop_height = max(1, int(height))
         if opacity is not None:
             self._center_crop_opacity = max(0.0, min(1.0, float(opacity)))
         self.update()
@@ -358,13 +356,13 @@ class ImageLabel(QLabel):
 
     def _ensure_center_crop_defaults(self, img_w: int, img_h: int) -> None:
         if self._center_crop_width is None:
-            self._center_crop_width = max(1, min(1210, img_w, img_h))
+            self._center_crop_width = 1210
         else:
-            self._center_crop_width = max(1, min(self._center_crop_width, img_w))
+            self._center_crop_width = max(1, self._center_crop_width)
         if self._center_crop_height is None:
-            self._center_crop_height = max(1, min(1210, img_w, img_h))
+            self._center_crop_height = 1210
         else:
-            self._center_crop_height = max(1, min(self._center_crop_height, img_h))
+            self._center_crop_height = max(1, self._center_crop_height)
 
     def set_overlays(
         self, poly_list: List[Tuple[List[Tuple[float, float]], QColor]]
@@ -1207,8 +1205,8 @@ class ImageLabel(QLabel):
             return
         img_h, img_w = self._orig_image_bgr.shape[:2]
         self._ensure_center_crop_defaults(img_w, img_h)
-        crop_w = min(self._center_crop_width or img_w, img_w)
-        crop_h = min(self._center_crop_height or img_h, img_h)
+        crop_w = self._center_crop_width or img_w
+        crop_h = self._center_crop_height or img_h
         if self._center_crop_shape == "circle":
             diameter = min(crop_w, crop_h)
             crop_w = crop_h = diameter
@@ -1230,8 +1228,7 @@ class ImageLabel(QLabel):
 
         painter.save()
         painter.fillPath(outside, QColor(0, 0, 0, int(self._center_crop_opacity * 255)))
-        pen = QPen(QColor(255, 255, 255), 1.5 / self._zoom, Qt.DashLine)
-        pen.setDashPattern([6, 4])
+        pen = QPen(QColor(255, 255, 255), 1.5 / self._zoom, Qt.SolidLine)
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
         if self._center_crop_shape == "circle":

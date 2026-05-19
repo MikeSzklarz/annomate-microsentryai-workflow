@@ -144,10 +144,30 @@ def test_center_crop_controls_update_canvas(canvas, calibrated_model, qtbot):
 
 def test_center_crop_defaults_to_605px_radius(qtbot):
     widget = ImageLabel()
-    widget.set_image(np.zeros((1500, 1500, 3), dtype=np.uint8))
+    widget.set_image(np.zeros((1080, 1080, 3), dtype=np.uint8))
     qtbot.addWidget(widget)
 
     settings = widget.center_crop_settings()
     assert settings["shape"] == "circle"
     assert settings["width"] == 1210
     assert settings["height"] == 1210
+
+
+def test_center_crop_reset_restores_defaults(canvas, calibrated_model, qtbot):
+    bar = ViewportActionsBar(canvas, calibrated_model, canvas)
+    bar.set_image_dimensions(100, 100)
+    qtbot.addWidget(bar)
+
+    bar._crop_shape_combo.setCurrentText("Rectangle")
+    bar._crop_width_spin.setValue(40)
+    bar._crop_height_spin.setValue(30)
+    bar._crop_opacity_slider.setValue(80)
+
+    qtbot.mouseClick(bar._btn_reset_crop, Qt.LeftButton)
+
+    settings = canvas.center_crop_settings()
+    assert settings["shape"] == "circle"
+    assert settings["width"] == 1210
+    assert settings["height"] == 1210
+    assert settings["opacity"] == 0.37
+    assert bar._crop_height_spin.value() == 605

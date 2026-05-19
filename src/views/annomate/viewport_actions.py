@@ -302,6 +302,11 @@ class ViewportActionsBar(QFrame):
         self._crop_opacity_lbl = QLabel("37%")
         self._crop_opacity_lbl.setFixedWidth(34)
         opacity_row.addWidget(self._crop_opacity_lbl)
+        self._btn_reset_crop = QPushButton("Reset")
+        self._btn_reset_crop.setToolTip("Reset crop shape, size, and opacity")
+        self._btn_reset_crop.setFixedWidth(54)
+        self._btn_reset_crop.clicked.connect(self._on_reset_crop_clicked)
+        opacity_row.addWidget(self._btn_reset_crop)
         panel_layout.addLayout(opacity_row)
 
         self._crop_hint_lbl = QLabel("Centered on image")
@@ -391,8 +396,6 @@ class ViewportActionsBar(QFrame):
             diameter = min(
                 self._crop_width_spin.value(),
                 self._crop_height_spin.value(),
-                max(1, self._image_w),
-                max(1, self._image_h),
             )
             self._canvas.set_center_crop(
                 shape=shape,
@@ -434,6 +437,17 @@ class ViewportActionsBar(QFrame):
         if self._refreshing:
             return
         self._canvas.set_center_crop(opacity=value / 100.0)
+
+    def _on_reset_crop_clicked(self) -> None:
+        if self._refreshing:
+            return
+        self._canvas.set_center_crop(
+            shape="circle",
+            width=1210,
+            height=1210,
+            opacity=0.37,
+        )
+        self._refresh_crop_controls()
 
     def _on_spacing_mode_changed(self, auto_checked: bool) -> None:
         self._spacing_edit.setEnabled(not auto_checked)
@@ -535,7 +549,7 @@ class ViewportActionsBar(QFrame):
         self._refreshing = True
         self._crop_chk.setChecked(bool(settings.get("enabled")))
         if shape == "circle":
-            max_diameter = max(1, min(max_w, max_h))
+            max_diameter = max(1210, min(max_w, max_h))
             diameter = max(1, min(int(min(width, height)), max_diameter))
             self._crop_primary_lbl.setText("D")
             self._crop_secondary_lbl.setText("R")
@@ -550,10 +564,14 @@ class ViewportActionsBar(QFrame):
             self._crop_secondary_lbl.setText("H")
             self._crop_width_spin.setToolTip("Rectangle width")
             self._crop_height_spin.setToolTip("Rectangle height")
-            self._crop_width_spin.setRange(1, max_w)
-            self._crop_height_spin.setRange(1, max_h)
-            self._crop_width_spin.setValue(max(1, min(int(width), max_w)))
-            self._crop_height_spin.setValue(max(1, min(int(height), max_h)))
+            self._crop_width_spin.setRange(1, max(1210, max_w))
+            self._crop_height_spin.setRange(1, max(1210, max_h))
+            self._crop_width_spin.setValue(
+                max(1, min(int(width), self._crop_width_spin.maximum()))
+            )
+            self._crop_height_spin.setValue(
+                max(1, min(int(height), self._crop_height_spin.maximum()))
+            )
         shape_label = {
             "rectangle": "Rectangle",
             "circle": "Circle",
@@ -577,6 +595,7 @@ class ViewportActionsBar(QFrame):
         self._crop_width_spin.setEnabled(self._has_image)
         self._crop_height_spin.setEnabled(self._has_image)
         self._crop_opacity_slider.setEnabled(self._has_image)
+        self._btn_reset_crop.setEnabled(self._has_image)
         self._btn_measure.setEnabled(calibrated and self._has_image)
         self._grid_chk.setEnabled(calibrated)
         self._opacity_slider.setEnabled(calibrated)
