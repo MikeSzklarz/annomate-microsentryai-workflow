@@ -9,7 +9,7 @@ import os
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, QEvent, QPointF, Signal
+from PySide6.QtCore import Qt, QEvent, QPoint, QPointF, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QComboBox,
     QApplication,
+    QLabel,
 )
 
 from views.annomate._splitter import StyledSplitter
@@ -107,12 +108,22 @@ class _ReviewBar(QFrame):
     def __init__(self, canvas: QWidget, parent: QWidget = None) -> None:
         super().__init__(parent)
         self._canvas = canvas
+        self._dragging = False
+        self._drag_start = QPoint()
+        self._custom_pos_ratio = None
         self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
         self.setAutoFillBackground(True)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(6)
+
+        self._drag_handle = QLabel("⋮")
+        self._drag_handle.setToolTip("Drag to reposition")
+        self._drag_handle.setCursor(Qt.SizeAllCursor)
+        self._drag_handle.setFixedWidth(10)
+        self._drag_handle.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._drag_handle)
 
         self._btn_accept = QToolButton()
         self._btn_accept.setText("✓ Accept")
@@ -170,8 +181,50 @@ class _ReviewBar(QFrame):
         )
 
     def reposition(self, canvas_size) -> None:
-        x = canvas_size.width() - self.width() - self._MARGIN
-        self.move(max(0, x), self._MARGIN)
+        if self._custom_pos_ratio is not None:
+            rx, ry = self._custom_pos_ratio
+            x = int(rx * max(1, canvas_size.width() - self.width()))
+            y = int(ry * max(1, canvas_size.height() - self.height()))
+        else:
+            x = canvas_size.width() - self.width() - self._MARGIN
+            y = self._MARGIN
+        self.move(self._clamped_pos(x, y))
+
+    def mousePressEvent(self, event) -> None:
+        handle_rect = self._drag_handle.geometry()
+        if event.button() == Qt.LeftButton and handle_rect.contains(event.position().toPoint()):
+            self._dragging = True
+            self._drag_start = event.position().toPoint()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._dragging:
+            pos = self.mapToParent(event.position().toPoint() - self._drag_start)
+            self.move(self._clamped_pos(pos.x(), pos.y()))
+            self._store_custom_pos_ratio()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self._dragging:
+            self._dragging = False
+            self._store_custom_pos_ratio()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _clamped_pos(self, x: int, y: int) -> QPoint:
+        max_x = max(0, self._canvas.width() - self.width())
+        max_y = max(0, self._canvas.height() - self.height())
+        return QPoint(max(0, min(x, max_x)), max(0, min(y, max_y)))
+
+    def _store_custom_pos_ratio(self) -> None:
+        max_x = max(1, self._canvas.width() - self.width())
+        max_y = max(1, self._canvas.height() - self.height())
+        self._custom_pos_ratio = (self.x() / max_x, self.y() / max_y)
 
 
 class AnnoMateWindow(QWidget):
@@ -546,6 +599,8 @@ class AnnoMateWindow(QWidget):
     def _on_review_decision(self, decision) -> None:
         if self._current_row >= 0:
             self.dataset_model.set_review_decision(self._current_row, decision)
+            if decision in ("accept", "reject"):
+                self._next_image()
 
     def _on_annotation_selected(self, idx: int) -> None:
         """Apply selection to the canvas and sync the UI slider to match the polygon's thickness."""
