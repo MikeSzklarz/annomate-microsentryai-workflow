@@ -30,6 +30,16 @@ _TRASH_W = 28
 _NAME_MIN_W = 60
 
 
+class _NoWheelComboBox(QComboBox):
+    """Combo box that does not change value from accidental mouse-wheel scroll."""
+
+    def wheelEvent(self, event) -> None:
+        if self.view().isVisible():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
 class _AnnotationRow(QWidget):
     """One annotation row: color dot | class combo | vertex count | trash.
 
@@ -73,7 +83,7 @@ class _AnnotationRow(QWidget):
         dot_h.addWidget(dot, alignment=Qt.AlignCenter)
         h.addWidget(dot_col)
 
-        combo = QComboBox()
+        combo = _NoWheelComboBox()
         combo.addItems(class_names)
         combo.setCurrentText(name)
         combo.setMinimumWidth(_NAME_MIN_W)
