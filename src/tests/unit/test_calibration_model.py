@@ -25,6 +25,7 @@ class TestApplyCalibration:
         assert model.scale() == pytest.approx(0.05)
         assert model.unit() == "mm"
         assert model.is_calibrated()
+        assert model.grid_visible() is True
 
     def test_diagonal_points(self, model):
         model.set_calib_points((0.0, 0.0), (3.0, 4.0))  # pixel_dist = 5

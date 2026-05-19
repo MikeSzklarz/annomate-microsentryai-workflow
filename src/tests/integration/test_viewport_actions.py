@@ -1,0 +1,118 @@
+import numpy as np
+import pytest
+from PySide6.QtCore import Qt
+
+from core.states.calibration_state import CalibrationState
+from models.calibration_model import CalibrationModel
+from views.annomate.image_label import ImageLabel
+from views.annomate.viewport_actions import ViewportActionsBar
+
+
+@pytest.fixture
+def calibrated_model():
+    model = CalibrationModel(CalibrationState())
+    model.set_calib_points((0.0, 0.0), (100.0, 0.0))
+    assert model.apply_calibration(10.0, "mm")
+    return model
+
+
+@pytest.fixture
+def canvas(qtbot):
+    widget = ImageLabel()
+    widget.resize(320, 240)
+    widget.set_image(np.zeros((100, 100, 3), dtype=np.uint8))
+    qtbot.addWidget(widget)
+    widget.show()
+    return widget
+
+
+def test_zoom_buttons_drive_canvas(canvas, calibrated_model, qtbot):
+    bar = ViewportActionsBar(canvas, calibrated_model, canvas)
+    qtbot.addWidget(bar)
+
+    qtbot.mouseClick(bar._btn_zoom_in, Qt.LeftButton)
+    assert canvas._zoom > 1.0
+
+    qtbot.mouseClick(bar._btn_reset, Qt.LeftButton)
+    assert canvas._zoom == 1.0
+
+    qtbot.mouseClick(bar._btn_zoom_out, Qt.LeftButton)
+    assert canvas._zoom < 1.0
+
+
+def test_calibrate_and_measure_emit_tool_requests(canvas, calibrated_model, qtbot):
+    bar = ViewportActionsBar(canvas, calibrated_model, canvas)
+    bar.set_image_loaded(True)
+    qtbot.addWidget(bar)
+
+    requested = []
+    bar.tool_selected.connect(requested.append)
+
+    qtbot.mouseClick(bar._btn_calibrate, Qt.LeftButton)
+    assert requested[-1] == "calibrate"
+    assert bar._btn_calibrate.isChecked()
+    assert not bar._btn_measure.isChecked()
+
+    qtbot.mouseClick(bar._btn_measure, Qt.LeftButton)
+    assert requested[-1] == "measure"
+    assert bar._btn_measure.isChecked()
+    assert not bar._btn_calibrate.isChecked()
+
+    qtbot.mouseClick(bar._btn_measure, Qt.LeftButton)
+    assert requested[-1] == ""
+    assert not bar._btn_measure.isChecked()
+
+
+def test_measure_and_grid_settings_disabled_until_calibrated(canvas, qtbot):
+    model = CalibrationModel(CalibrationState())
+    bar = ViewportActionsBar(canvas, model, canvas)
+    bar.set_image_loaded(True)
+    qtbot.addWidget(bar)
+
+    assert bar._btn_calibrate.isEnabled()
+    assert not bar._btn_measure.isEnabled()
+    assert not bar._grid_chk.isEnabled()
+
+    model.set_calib_points((0.0, 0.0), (100.0, 0.0))
+    assert model.apply_calibration(5.0, "mm")
+
+    assert bar._btn_measure.isEnabled()
+    assert bar._grid_chk.isEnabled()
+    assert model.grid_visible() is True
+    assert bar._grid_chk.isChecked()
+
+
+def test_grid_toggle_in_settings_updates_model(canvas, calibrated_model, qtbot):
+    bar = ViewportActionsBar(canvas, calibrated_model, canvas)
+    qtbot.addWidget(bar)
+
+    assert calibrated_model.grid_visible() is True
+    qtbot.mouseClick(bar._grid_chk, Qt.LeftButton)
+
+    assert calibrated_model.grid_visible() is False
+    assert not bar._grid_chk.isChecked()
+
+
+def test_settings_controls_update_calibration_model(canvas, calibrated_model, qtbot):
+    bar = ViewportActionsBar(canvas, calibrated_model, canvas)
+    qtbot.addWidget(bar)
+
+    bar._opacity_slider.setValue(75)
+    assert calibrated_model.grid_opacity() == 0.75
+
+    bar._spacing_edit.setText("2.5")
+    bar._radio_fixed.setChecked(True)
+    assert calibrated_model.grid_spacing_auto() is False
+    assert calibrated_model.grid_spacing_world() == 2.5
+
+    calibrated_model.set_meas_p1((0.0, 0.0))
+    calibrated_model.set_meas_p2((100.0, 0.0))
+    assert "10" in bar._meas_lbl.text()
+
+    qtbot.mouseClick(bar._btn_clear_measurement, Qt.LeftButton)
+    assert calibrated_model.meas_points() == (None, None)
+
+    qtbot.mouseClick(bar._btn_reset_calibration, Qt.LeftButton)
+    assert calibrated_model.is_calibrated() is False
+    assert not bar._btn_measure.isEnabled()
+    assert not bar._grid_chk.isEnabled()
