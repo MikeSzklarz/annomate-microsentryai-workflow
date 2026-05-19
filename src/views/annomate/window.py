@@ -113,6 +113,16 @@ class _ReviewBar(QFrame):
         self._custom_pos_ratio = None
         self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
         self.setAutoFillBackground(True)
+        self.setObjectName("reviewBar")
+        self.setStyleSheet(
+            """
+            QFrame#reviewBar {
+                background: palette(window);
+                border: 1px solid palette(mid);
+                border-radius: 8px;
+            }
+            """
+        )
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
@@ -121,14 +131,19 @@ class _ReviewBar(QFrame):
         self._drag_handle = QLabel("⋮")
         self._drag_handle.setToolTip("Drag to reposition")
         self._drag_handle.setCursor(Qt.SizeAllCursor)
-        self._drag_handle.setFixedWidth(10)
+        self._drag_handle.setFixedWidth(14)
         self._drag_handle.setAlignment(Qt.AlignCenter)
+        handle_font = self._drag_handle.font()
+        handle_font.setPointSize(handle_font.pointSize() + 3)
+        handle_font.setBold(True)
+        self._drag_handle.setFont(handle_font)
         layout.addWidget(self._drag_handle)
 
         self._btn_accept = QToolButton()
         self._btn_accept.setText("✓ Accept")
         self._btn_accept.setToolTip("Mark this image as accepted")
         self._btn_accept.setCheckable(True)
+        self._btn_accept.setCursor(Qt.PointingHandCursor)
         self._btn_accept.setFixedHeight(self._BTN_H)
         self._btn_accept.clicked.connect(
             lambda checked: self._on_clicked("accept", checked)
@@ -139,6 +154,7 @@ class _ReviewBar(QFrame):
         self._btn_reject.setText("✗ Reject")
         self._btn_reject.setToolTip("Mark this image as rejected")
         self._btn_reject.setCheckable(True)
+        self._btn_reject.setCursor(Qt.PointingHandCursor)
         self._btn_reject.setFixedHeight(self._BTN_H)
         self._btn_reject.clicked.connect(
             lambda checked: self._on_clicked("reject", checked)

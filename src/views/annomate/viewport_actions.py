@@ -81,6 +81,16 @@ class ViewportActionsBar(QFrame):
 
         self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
         self.setAutoFillBackground(True)
+        self.setObjectName("viewportActionsBar")
+        self.setStyleSheet(
+            """
+            QFrame#viewportActionsBar {
+                background: palette(window);
+                border: 1px solid palette(mid);
+                border-radius: 8px;
+            }
+            """
+        )
 
         font = QFont()
         font.setPointSize(16)
@@ -149,6 +159,7 @@ class ViewportActionsBar(QFrame):
         btn.setText(text)
         btn.setToolTip(tooltip)
         btn.setFixedSize(self._BTN_SIZE, self._BTN_SIZE)
+        btn.setCursor(Qt.PointingHandCursor)
         return btn
 
     def _make_popup_button(self, text: str, tooltip: str) -> QToolButton:
@@ -156,6 +167,7 @@ class ViewportActionsBar(QFrame):
         btn.setText(text)
         btn.setToolTip(tooltip)
         btn.setFixedSize(self._BTN_SIZE, self._BTN_SIZE)
+        btn.setCursor(Qt.PointingHandCursor)
         return btn
 
     def _add_divider(self, layout: QHBoxLayout) -> None:
