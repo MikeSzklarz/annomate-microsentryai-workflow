@@ -46,11 +46,13 @@ class CalibrationModel(QObject):
         self._state.scale = real_distance / pixel_dist
         self._state.unit = unit
         self._state.real_distance = real_distance
+        self._state.grid_visible = True
 
         if self._state.grid_spacing_auto:
             self._state.grid_spacing_world = self._nice_spacing(self._state.scale)
 
         self.calibration_changed.emit()
+        self.grid_changed.emit()
         return True
 
     def clear_calibration(self) -> None:

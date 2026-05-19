@@ -4,7 +4,6 @@ from .classes import ClassesSection
 from .annotations import AnnotationsSection
 from .metadata import MetadataSection
 from .microsentry import MicrosentrySection
-from .calibration import CalibrationSection
 
 __all__ = [
     "_CollapsibleSection",
@@ -13,5 +12,4 @@ __all__ = [
     "AnnotationsSection",
     "MetadataSection",
     "MicrosentrySection",
-    "CalibrationSection",
 ]

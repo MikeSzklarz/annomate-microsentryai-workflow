@@ -10,7 +10,6 @@ from views.annomate.sections import (
     AnnotationsSection,
     MetadataSection,
     MicrosentrySection,
-    CalibrationSection,
 )
 
 
@@ -109,13 +108,6 @@ class RightPanel(QWidget):
         self.annotations.annotation_selected.connect(self.annotation_selected)
         annos_sec.body_layout().addWidget(self.annotations)
         cl.addWidget(annos_sec)
-
-        calib_sec = _CollapsibleSection("Grid Calibration")
-        self._calib_section = CalibrationSection()
-        if calibration_model is not None:
-            self._calib_section.set_calibration_model(calibration_model)
-        calib_sec.body_layout().addWidget(self._calib_section)
-        cl.addWidget(calib_sec)
 
         meta_sec = _CollapsibleSection("Inspector/Notes")
         self.metadata = MetadataSection(dataset_model)

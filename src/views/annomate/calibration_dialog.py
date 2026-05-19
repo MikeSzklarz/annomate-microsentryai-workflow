@@ -13,7 +13,7 @@ class CalibrationDialog(QDialog):
     retrieve (real_distance, unit).
     """
 
-    _UNITS = ["mm", "cm", "m", "in", "ft"]
+    _UNITS = ["mm", "um", "nm", "cm", "m", "in", "ft"]
 
     def __init__(self, pixel_dist: float, parent=None) -> None:
         super().__init__(parent)

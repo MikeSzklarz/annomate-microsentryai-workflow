@@ -10,7 +10,7 @@ import os
 import cv2
 import numpy as np
 from PySide6.QtCore import Qt, QEvent, QPointF, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget,
     QFrame,
@@ -30,6 +30,7 @@ from views.annomate.image_label import ImageLabel, SAM_BBOX, CALIBRATE, MEASURE
 from views.annomate.right_panel import RightPanel
 from views.annomate.tool_palette import ToolPalette
 from views.annomate.status_bar import AnnoMateStatusBar
+from views.annomate.viewport_actions import ViewportActionsBar
 from controllers.sam_controller import SAMController
 
 logger = logging.getLogger(__name__)
@@ -173,44 +174,6 @@ class _ReviewBar(QFrame):
         self.move(max(0, x), self._MARGIN)
 
 
-class _ZoomToolbar(QFrame):
-    """Floating vertical toolbar with zoom-in, zoom-out, and reset-view buttons."""
-
-    _MARGIN = 10
-    _BTN_SIZE = 30
-
-    def __init__(self, canvas, parent: QWidget = None) -> None:
-        super().__init__(parent)
-        self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
-
-        font = QFont()
-        font.setPointSize(14)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(2)
-
-        for text, tip, slot in (
-            ("+", "Zoom In", canvas.zoom_in),
-            ("−", "Zoom Out", canvas.zoom_out),
-            ("⊙", "Reset View", canvas.reset_view),
-        ):
-            btn = QToolButton()
-            btn.setText(text)
-            btn.setToolTip(tip)
-            btn.setFixedSize(self._BTN_SIZE, self._BTN_SIZE)
-            btn.setFont(font)
-            btn.clicked.connect(slot)
-            layout.addWidget(btn)
-
-        self.adjustSize()
-
-    def reposition(self, canvas_size) -> None:
-        x = self._MARGIN
-        y = canvas_size.height() - self.height() - self._MARGIN
-        self.move(x, y)
-
-
 class AnnoMateWindow(QWidget):
     """Experimental Photoshop-style layout tab.
 
@@ -286,6 +249,7 @@ class AnnoMateWindow(QWidget):
 
         # Tool palette
         self.tool_palette.tool_selected.connect(self._on_tool_selected)
+        self.viewport_actions.tool_selected.connect(self._on_tool_selected)
         self.canvas.draw_attempted.connect(self._on_draw_attempted)
 
         # Route thickness signal directly to canvas setter
@@ -350,8 +314,10 @@ class AnnoMateWindow(QWidget):
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         splitter.addWidget(self.canvas)
 
-        self._zoom_toolbar = _ZoomToolbar(self.canvas, self.canvas)
-        self._zoom_toolbar.raise_()
+        self.viewport_actions = ViewportActionsBar(
+            self.canvas, self._calib_model, self.canvas
+        )
+        self.viewport_actions.raise_()
 
         self._review_bar = _ReviewBar(self.canvas, self.canvas)
         self._review_bar.decision_changed.connect(self._on_review_decision)
@@ -362,7 +328,9 @@ class AnnoMateWindow(QWidget):
 
         self.canvas.installEventFilter(self)
 
-        self.right_panel = RightPanel(self.dataset_model, self.inference_model, self._calib_model, self)
+        self.right_panel = RightPanel(
+            self.dataset_model, self.inference_model, self._calib_model, self
+        )
         self.right_panel.setMinimumWidth(160)
         splitter.addWidget(self.right_panel)
 
@@ -372,17 +340,17 @@ class AnnoMateWindow(QWidget):
         return workspace
 
     # ------------------------------------------------------------------ #
-    # Zoom toolbar positioning
+    # Floating canvas controls
     # ------------------------------------------------------------------ #
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        self._zoom_toolbar.reposition(self.canvas.size())
+        self.viewport_actions.reposition(self.canvas.size())
         self._review_bar.reposition(self.canvas.size())
 
     def eventFilter(self, obj, event) -> bool:
         if obj is self.canvas and event.type() == QEvent.Resize:
-            self._zoom_toolbar.reposition(event.size())
+            self.viewport_actions.reposition(event.size())
             self._review_bar.reposition(event.size())
         return super().eventFilter(obj, event)
 
@@ -401,6 +369,8 @@ class AnnoMateWindow(QWidget):
             self._active_class = ""
             self._review_bar.setVisible(False)
             self._ai_popup.setVisible(False)
+            self.viewport_actions.set_image_loaded(False)
+            self.viewport_actions.set_active_tool("")
             self.canvas.clear_image()
             self.right_panel.set_current_row(-1)
             self.status_bar.set_class("")
@@ -414,6 +384,8 @@ class AnnoMateWindow(QWidget):
         self._review_bar.set_decision(self.dataset_model.get_review_decision(row))
         self._review_bar.setVisible(True)
         self._review_bar.reposition(self.canvas.size())
+        self.viewport_actions.set_image_loaded(True)
+        self.viewport_actions.reposition(self.canvas.size())
         self._ai_popup.setVisible(False)
         self._selected_ai_idx = -1
         self.canvas.set_image(
@@ -445,6 +417,7 @@ class AnnoMateWindow(QWidget):
     def _on_tool_selected(self, tool_name: str) -> None:
         if tool_name == "sam_bbox":
             self._active_tool = "sam_bbox"
+            self.viewport_actions.set_active_tool("")
             self.canvas.set_tool(SAM_BBOX)
             self.status_bar.set_tool("sam_bbox")
             if not self._sam_loading:
@@ -457,22 +430,28 @@ class AnnoMateWindow(QWidget):
 
         if tool_name == "calibrate":
             self._active_tool = "calibrate"
+            self.tool_palette.deselect_all()
+            self.viewport_actions.set_active_tool("calibrate")
             self.canvas.set_tool(CALIBRATE)
             self.status_bar.set_tool("calibrate")
             return
 
         if tool_name == "measure":
             self._active_tool = "measure"
+            self.tool_palette.deselect_all()
+            self.viewport_actions.set_active_tool("measure")
             self.canvas.set_tool(MEASURE)
             self.status_bar.set_tool("measure")
             return
 
         self._active_tool = tool_name
+        self.viewport_actions.set_active_tool("")
         self.canvas.set_tool("polygon" if tool_name == "polygon" else None)
         self.status_bar.set_tool(tool_name)
 
     def _on_tool_canceled(self) -> None:
         self.tool_palette.deselect_all()
+        self.viewport_actions.set_active_tool("")
         self._active_tool = ""
         self.status_bar.set_tool("")
         self.status_bar.set_sam_hint("")
@@ -493,6 +472,7 @@ class AnnoMateWindow(QWidget):
                 QMessageBox.warning(self, "Calibration", "The two points are too close together.")
         self.canvas.set_tool(None)  # clears _pending_calib_pts, resets cursor
         self.tool_palette.deselect_all()
+        self.viewport_actions.set_active_tool("")
         self._active_tool = ""
         self.status_bar.set_tool("")
 
@@ -502,6 +482,7 @@ class AnnoMateWindow(QWidget):
         if not class_names:
             self.canvas.set_tool(None)
             self.tool_palette.deselect_all()
+            self.viewport_actions.set_active_tool("")
             self._active_tool = ""
             self.status_bar.set_tool("")
             QMessageBox.warning(
@@ -511,6 +492,7 @@ class AnnoMateWindow(QWidget):
         if not self._active_class or self._active_class not in class_names:
             self.canvas.set_tool(None)
             self.tool_palette.deselect_all()
+            self.viewport_actions.set_active_tool("")
             self._active_tool = ""
             self.status_bar.set_tool("")
             QMessageBox.warning(
@@ -890,6 +872,9 @@ class AnnoMateWindow(QWidget):
         """Handle annotation hotkeys.
 
         - ``P``: toggle polygon tool
+        - ``S``: toggle SAM segment tool
+        - ``C``: toggle calibration tool
+        - ``M``: toggle measure tool
         - ``Delete``: delete the selected annotation
 
         Args:
@@ -900,9 +885,9 @@ class AnnoMateWindow(QWidget):
         elif event.key() == Qt.Key_S:
             self.tool_palette.toggle_sam()
         elif event.key() == Qt.Key_C:
-            self.tool_palette.toggle_calibrate()
+            self.viewport_actions.toggle_calibrate()
         elif event.key() == Qt.Key_M:
-            self.tool_palette.toggle_measure()
+            self.viewport_actions.toggle_measure()
         elif event.key() == Qt.Key_Delete:
             self._delete_selected_annotation()
         super().keyPressEvent(event)
