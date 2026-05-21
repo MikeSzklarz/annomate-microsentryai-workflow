@@ -119,3 +119,26 @@ def test_classes_section_uses_table_view(classes_section):
     assert widget._table.isSortingEnabled()
     assert widget._table_model.headerData(ClassColumns.COLOR, Qt.Horizontal) == ""
     assert widget._table.horizontalHeader().sortIndicatorSection() == ClassColumns.CLASS
+
+
+def test_classes_table_expands_to_show_all_rows(classes_section, qtbot):
+    widget, _model = classes_section
+
+    assert widget._table.verticalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+    last_index = widget._proxy.index(widget._proxy.rowCount() - 1, ClassColumns.CLASS)
+    assert (
+        widget._table.visualRect(last_index).bottom()
+        < widget._table.viewport().height()
+    )
+
+    old_height = widget._table.height()
+    widget._name_input.setText("Delta")
+    widget._add_class()
+    qtbot.wait(50)
+
+    last_index = widget._proxy.index(widget._proxy.rowCount() - 1, ClassColumns.CLASS)
+    assert widget._table.height() > old_height
+    assert (
+        widget._table.visualRect(last_index).bottom()
+        < widget._table.viewport().height()
+    )

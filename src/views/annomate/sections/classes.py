@@ -214,8 +214,9 @@ class ClassesSection(QWidget):
         self._table.setSelectionMode(QAbstractItemView.SingleSelection)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.setFocusPolicy(Qt.NoFocus)
-        self._table.setMinimumHeight(80)
-        self._table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._table.clicked.connect(self._on_table_index_activated)
         self._table.activated.connect(self._on_table_index_activated)
         self._table.setStyleSheet(
@@ -261,6 +262,7 @@ class ClassesSection(QWidget):
         self._table.setColumnWidth(ClassColumns.VISIBILITY, _VISIBILITY_W)
         self._table.setColumnWidth(ClassColumns.DELETE, _DELETE_W)
         self._table.sortByColumn(ClassColumns.CLASS, Qt.AscendingOrder)
+        self._sync_table_height()
 
         layout.addWidget(self._table)
 
@@ -279,6 +281,18 @@ class ClassesSection(QWidget):
         add_h.addWidget(btn_add)
 
         layout.addWidget(add_row)
+
+    def _sync_table_height(self) -> None:
+        """Grow the table viewport to fit every class row without scrolling."""
+        if not hasattr(self, "_table"):
+            return
+        header_h = self._table.horizontalHeader().sizeHint().height()
+        rows_h = 0
+        for row in range(self._proxy.rowCount()):
+            rows_h += self._table.verticalHeader().sectionSize(row)
+        frame_h = self._table.frameWidth() * 2
+        self._table.setFixedHeight(header_h + rows_h + frame_h + 2)
+        self._table.updateGeometry()
 
     def set_current_row(self, row: int) -> None:
         self._current_row = row
@@ -354,6 +368,7 @@ class ClassesSection(QWidget):
     def _on_class_model_reset(self) -> None:
         if self._selected_name not in self.dataset_model.get_class_names():
             self._selected_name = ""
+        self._sync_table_height()
         self._sync_selection()
 
     def _change_color(self, name: str) -> None:
