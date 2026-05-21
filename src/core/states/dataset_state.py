@@ -19,6 +19,7 @@ class DatasetState:
         notes (dict[str, str]): Maps image filename to a free-text note.
         class_names (list[str]): Ordered class name registry.
         class_colors (dict[str, tuple]): Maps class name to an RGB color tuple.
+        class_visibility (dict[str, bool]): Maps class name to viewport visibility.
     """
 
     def __init__(self) -> None:
@@ -36,6 +37,7 @@ class DatasetState:
         # Class registry — initialized from defaults, NOT cleared on folder load
         self.class_names = list(DEFAULT_CLASSES.keys())
         self.class_colors = dict(DEFAULT_CLASSES)  # { name: (r, g, b) }
+        self.class_visibility = {name: True for name in self.class_names}
 
     def clear(self) -> None:
         """Reset per-folder data. Class registry is intentionally preserved."""
@@ -50,6 +52,7 @@ class DatasetState:
         """Reset the class registry back to defaults."""
         self.class_names = list(DEFAULT_CLASSES.keys())
         self.class_colors = dict(DEFAULT_CLASSES)
+        self.class_visibility = {name: True for name in self.class_names}
 
     def is_reviewed(self, img_name: str) -> bool:
         """Return whether an image has at least one annotation or metadata entry.
@@ -139,6 +142,7 @@ class DatasetState:
         if name not in self.class_names:
             self.class_names.append(name)
             self.class_colors[name] = color
+            self.class_visibility[name] = True
 
     def delete_class(self, name: str) -> None:
         """Remove a class and all annotations that reference it.
@@ -150,10 +154,20 @@ class DatasetState:
         if name in self.class_names:
             self.class_names.remove(name)
             self.class_colors.pop(name, None)
+            self.class_visibility.pop(name, None)
             for img in self.annotations:
                 self.annotations[img] = [
                     a for a in self.annotations[img] if a.get("category_name") != name
                 ]
+
+    def set_class_visible(self, name: str, visible: bool) -> None:
+        """Set viewport visibility for an annotation class."""
+        if name in self.class_names:
+            self.class_visibility[name] = bool(visible)
+
+    def is_class_visible(self, name: str) -> bool:
+        """Return whether an annotation class should render in the viewport."""
+        return self.class_visibility.get(name, True)
 
     # --- Per-image Metadata ---
 
