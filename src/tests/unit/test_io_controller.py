@@ -89,6 +89,67 @@ class TestExportCsv:
         assert rows[0]["image_name"] == "img.jpg"
 
 
+class TestAnnotationClassFiles:
+    def test_import_simple_class_file_adds_classes_in_order(self, setup, tmp_path):
+        model, controller, _ = setup
+        class_file = tmp_path / "classes.txt"
+        class_file.write_text("inclusion\nvoid\ncrack\n", encoding="utf-8")
+
+        msg = controller.import_annotation_classes(str(class_file))
+
+        assert model.get_class_names() == ["inclusion", "void", "crack"]
+        assert msg == "Imported 3 class(es), skipped 0 duplicate(s)."
+
+    def test_import_ignores_blank_lines_whitespace_and_comments(self, setup, tmp_path):
+        model, controller, _ = setup
+        class_file = tmp_path / "classes.txt"
+        class_file.write_text(
+            "\n  inclusion  \n# comment\n   # another comment\nvoid\n",
+            encoding="utf-8",
+        )
+
+        controller.import_annotation_classes(str(class_file))
+
+        assert model.get_class_names() == ["inclusion", "void"]
+
+    def test_import_skips_existing_classes_and_keeps_colors(self, setup, tmp_path):
+        model, controller, _ = setup
+        model.add_class("void", (12, 34, 56))
+        class_file = tmp_path / "classes.txt"
+        class_file.write_text("void\ncrack\nvoid\n", encoding="utf-8")
+
+        msg = controller.import_annotation_classes(str(class_file))
+
+        assert model.get_class_names() == ["void", "crack"]
+        assert model.get_class_color("void") == (12, 34, 56)
+        assert msg == "Imported 1 class(es), skipped 2 duplicate(s)."
+
+    def test_export_writes_one_class_per_line_in_order(self, setup, tmp_path):
+        model, controller, _ = setup
+        model.add_class("inclusion", (255, 0, 0))
+        model.add_class("void", (0, 200, 0))
+        out_dir = tmp_path / "project"
+
+        controller.export_annotation_classes(str(out_dir))
+
+        class_file = out_dir / "annotation_classes.txt"
+        assert class_file.read_text(encoding="utf-8").splitlines() == [
+            "inclusion",
+            "void",
+        ]
+
+    def test_export_creates_output_directory_and_returns_path(self, setup, tmp_path):
+        model, controller, _ = setup
+        model.add_class("inclusion", (255, 0, 0))
+        out_dir = tmp_path / "missing" / "project"
+
+        msg = controller.export_annotation_classes(str(out_dir))
+
+        class_file = out_dir / "annotation_classes.txt"
+        assert class_file.exists()
+        assert str(class_file) in msg
+
+
 class TestImportRoundtrip:
     def test_custom_format_roundtrip(self, setup, tmp_path):
         model, controller, _ = setup

@@ -278,9 +278,72 @@ class IOController:
         logger.debug("Exported %d binary mask(s) to: %s", saved, out_dir)
         return f"Saved {saved} binary mask(s) to:\n{out_dir}"
 
+    def export_annotation_classes(self, out_dir: str) -> str:
+        """Write annotation class names to annotation_classes.txt in *out_dir*.
+
+        The file is a simple UTF-8 text file with one class name per line,
+        preserving the current class registry order.
+
+        Args:
+            out_dir (str): Directory where ``annotation_classes.txt`` is saved.
+
+        Returns:
+            str: Human-readable success message containing the saved path.
+        """
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        class_path = out_path / "annotation_classes.txt"
+
+        with open(class_path, "w", encoding="utf-8") as f:
+            for name in self.model.state.class_names:
+                f.write(f"{name}\n")
+
+        return f"Annotation classes saved to:\n{class_path}"
+
     # ------------------------------------------------------------------ #
     # Import
     # ------------------------------------------------------------------ #
+
+    def import_annotation_classes(self, path: str) -> str:
+        """Merge annotation class names from a simple UTF-8 text file.
+
+        Reads one class name per line. Blank lines and lines beginning with
+        ``#`` after trimming whitespace are ignored. Existing class names are
+        skipped and keep their current colors; new classes receive the next
+        default color in registration order.
+
+        Args:
+            path (str): Absolute path to the class-name text file.
+
+        Returns:
+            str: Human-readable summary of imported and skipped class counts.
+        """
+        with open(path, "r", encoding="utf-8") as f:
+            candidates = [
+                line.strip()
+                for line in f
+                if line.strip() and not line.strip().startswith("#")
+            ]
+
+        state = self.model.state
+        imported = 0
+        skipped = 0
+
+        self.model.beginResetModel()
+        try:
+            for name in candidates:
+                if name in state.class_names:
+                    skipped += 1
+                    continue
+
+                idx = len(state.class_names)
+                color = DEFAULT_CLASS_COLORS[idx % len(DEFAULT_CLASS_COLORS)]
+                state.add_class(name, color)
+                imported += 1
+        finally:
+            self.model.endResetModel()
+
+        return f"Imported {imported} class(es), skipped {skipped} duplicate(s)."
 
     def import_data_json(self, path: str) -> None:
         """Load annotations from a custom or COCO JSON file into the model.

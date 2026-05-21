@@ -130,7 +130,19 @@ class AppWindow(QMainWindow):
 
         data_menu = self.menuBar().addMenu("&Data")
         add(data_menu, "Import JSON Data…", "", self._import_coco)
+        add(
+            data_menu,
+            "Import Annotation Classes…",
+            "",
+            self._import_annotation_classes,
+        )
         data_menu.addSeparator()
+        add(
+            data_menu,
+            "Export Annotation Classes",
+            "",
+            self._export_annotation_classes,
+        )
         add(data_menu, "Export Polygons + Data…", "", self._export_polygons)
         add(data_menu, "Export Binary Masks…", "", self._export_binary_masks)
         add(data_menu, "Export CSV…", "", self._export_csv)
@@ -365,6 +377,36 @@ class AppWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Import JSON Data", f"Import failed:\n{exc}")
             return
+
+    def _import_annotation_classes(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Annotation Classes", "", "Text Files (*.txt)"
+        )
+        if not path:
+            return
+        try:
+            msg = self.io_controller.import_annotation_classes(path)
+            QMessageBox.information(self, "Import Annotation Classes", msg)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Import Annotation Classes", f"Import failed:\n{exc}"
+            )
+            return
+
+    def _export_annotation_classes(self) -> None:
+        if not self.project_controller.has_project:
+            self._save_project_as()
+            project_dir = self.project_controller.project_dir
+            if not project_dir or not os.path.isdir(project_dir):
+                return
+
+        try:
+            msg = self.io_controller.export_annotation_classes(
+                self.project_controller.project_dir
+            )
+            QMessageBox.information(self, "Export Annotation Classes", msg)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
 
     def _export_polygons(self) -> None:
         out_dir = QFileDialog.getExistingDirectory(
