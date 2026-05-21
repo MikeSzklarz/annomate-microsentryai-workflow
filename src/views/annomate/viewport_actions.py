@@ -65,19 +65,30 @@ class ViewportActionsBar(QFrame):
     """Floating bottom-center actions for canvas view and grid tools."""
 
     tool_selected = Signal(str)
+    center_calibration_started = Signal()
+    center_calibration_accepted = Signal()
+    center_template_cleared = Signal()
 
     _MARGIN = 12
     _BTN_SIZE = 32
 
-    def __init__(self, canvas, calibration_model=None, parent: QWidget = None) -> None:
+    def __init__(
+        self,
+        canvas,
+        calibration_model=None,
+        parent: QWidget = None,
+        center_template_model=None,
+    ) -> None:
         super().__init__(parent or canvas)
         self._canvas = canvas
         self._model = None
+        self._center_template_model = None
         self._active_tool = ""
         self._has_image = False
         self._image_w = 0
         self._image_h = 0
         self._refreshing = False
+        self._center_calibrating = False
 
         self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
         self.setAutoFillBackground(True)
@@ -149,10 +160,14 @@ class ViewportActionsBar(QFrame):
         self.set_image_loaded(False)
         if hasattr(canvas, "image_loaded"):
             canvas.image_loaded.connect(self.set_image_dimensions)
+        if hasattr(canvas, "centerCropChanged"):
+            canvas.centerCropChanged.connect(lambda _: self._refresh_crop_controls())
         if calibration_model is not None:
             self.set_calibration_model(calibration_model)
         else:
             self._refresh_controls()
+        if center_template_model is not None:
+            self.set_center_template_model(center_template_model)
 
     def _make_button(self, text: str, tooltip: str) -> QToolButton:
         btn = QToolButton()
@@ -329,6 +344,29 @@ class ViewportActionsBar(QFrame):
         self._crop_hint_lbl.setStyleSheet("color: grey; font-style: italic;")
         panel_layout.addWidget(self._crop_hint_lbl)
 
+        self._template_status_lbl = QLabel("Template: none")
+        self._template_status_lbl.setWordWrap(True)
+        self._template_status_lbl.setStyleSheet("color: grey; font-style: italic;")
+        panel_layout.addWidget(self._template_status_lbl)
+
+        template_row = QHBoxLayout()
+        template_row.setSpacing(6)
+        self._btn_calibrate_center = QPushButton("Calibrate Center")
+        self._btn_calibrate_center.setToolTip("Move the crop and dot together")
+        self._btn_calibrate_center.clicked.connect(self._on_calibrate_center_clicked)
+        template_row.addWidget(self._btn_calibrate_center)
+
+        self._btn_accept_center = QPushButton("Accept")
+        self._btn_accept_center.setToolTip("Save this center as the matching template")
+        self._btn_accept_center.clicked.connect(self._on_accept_center_clicked)
+        template_row.addWidget(self._btn_accept_center)
+
+        self._btn_clear_template = QPushButton("Clear")
+        self._btn_clear_template.setToolTip("Clear saved center template")
+        self._btn_clear_template.clicked.connect(self._on_clear_template_clicked)
+        template_row.addWidget(self._btn_clear_template)
+        panel_layout.addLayout(template_row)
+
         action.setDefaultWidget(panel)
         menu.addAction(action)
         return menu
@@ -339,6 +377,13 @@ class ViewportActionsBar(QFrame):
         model.grid_changed.connect(self._refresh_all)
         model.measurement_updated.connect(self._refresh_measurement)
         self._refresh_all()
+
+    def set_center_template_model(self, model) -> None:
+        self._center_template_model = model
+        model.template_changed.connect(self._refresh_template_status)
+        model.match_changed.connect(self._refresh_template_status)
+        self._refresh_template_status()
+        self._refresh_action_availability()
 
     def set_image_loaded(self, loaded: bool) -> None:
         self._has_image = loaded
@@ -401,7 +446,12 @@ class ViewportActionsBar(QFrame):
     def _on_crop_toggled(self, checked: bool) -> None:
         if self._refreshing:
             return
-        self._canvas.set_center_crop(enabled=checked)
+        if not checked:
+            self._center_calibrating = False
+        self._canvas.set_center_crop(
+            enabled=checked,
+            calibrating=False if not checked else None,
+        )
         self._refresh_crop_controls()
 
     def _on_crop_shape_changed(self, display_name: str) -> None:
@@ -462,14 +512,36 @@ class ViewportActionsBar(QFrame):
     def _on_reset_crop_clicked(self) -> None:
         if self._refreshing:
             return
+        self._center_calibrating = False
         self._canvas.set_center_crop(
             shape="circle",
             width=1210,
             height=1210,
             opacity=0.37,
             center_dot=False,
+            calibrating=False,
         )
         self._refresh_crop_controls()
+
+    def _on_calibrate_center_clicked(self) -> None:
+        if self._refreshing:
+            return
+        self.center_calibration_started.emit()
+
+    def _on_accept_center_clicked(self) -> None:
+        if self._refreshing:
+            return
+        self.center_calibration_accepted.emit()
+
+    def _on_clear_template_clicked(self) -> None:
+        if self._refreshing:
+            return
+        self.center_template_cleared.emit()
+
+    def set_center_calibrating(self, active: bool) -> None:
+        self._center_calibrating = bool(active)
+        self._refresh_template_status()
+        self._refresh_action_availability()
 
     def _on_spacing_mode_changed(self, auto_checked: bool) -> None:
         self._spacing_edit.setEnabled(not auto_checked)
@@ -559,6 +631,28 @@ class ViewportActionsBar(QFrame):
             return
         self._meas_lbl.setText(f"Distance: {dist:.4g} {self._model.unit()}")
 
+    def _refresh_template_status(self) -> None:
+        if not hasattr(self, "_template_status_lbl"):
+            return
+        if self._center_calibrating:
+            self._template_status_lbl.setText("Template: move crop, then Accept")
+            self._template_status_lbl.setStyleSheet("color: black; font-style: normal;")
+            self._refresh_action_availability()
+            return
+        model = self._center_template_model
+        if model is None or not model.has_template():
+            self._template_status_lbl.setText("Template: none")
+            self._template_status_lbl.setStyleSheet("color: grey; font-style: italic;")
+            self._refresh_action_availability()
+            return
+        score = model.last_score()
+        if score is None:
+            self._template_status_lbl.setText("Template: saved")
+        else:
+            self._template_status_lbl.setText(f"Template match: {score:.3f}")
+        self._template_status_lbl.setStyleSheet("color: black; font-style: normal;")
+        self._refresh_action_availability()
+
     def _refresh_crop_controls(self) -> None:
         settings = self._canvas.center_crop_settings()
         max_w = max(1, self._image_w)
@@ -603,12 +697,19 @@ class ViewportActionsBar(QFrame):
         self._crop_opacity_slider.setValue(opacity_pct)
         self._crop_opacity_lbl.setText(f"{opacity_pct}%")
         self._crop_center_dot_chk.setChecked(center_dot)
+        if settings.get("calibrating") != self._center_calibrating:
+            self._center_calibrating = bool(settings.get("calibrating"))
         self._crop_hint_lbl.setText(
-            f"Image: {self._image_w} × {self._image_h} px"
+            (
+                f"Center: {settings.get('center_x'):.0f}, {settings.get('center_y'):.0f}"
+                if settings.get("center_x") is not None
+                else f"Image: {self._image_w} × {self._image_h} px"
+            )
             if self._has_image
             else "Load an image to preview a crop"
         )
         self._refreshing = False
+        self._refresh_template_status()
 
     def _refresh_action_availability(self) -> None:
         calibrated = self._model is not None and self._model.is_calibrated()
@@ -621,6 +722,14 @@ class ViewportActionsBar(QFrame):
         self._crop_opacity_slider.setEnabled(self._has_image)
         self._crop_center_dot_chk.setEnabled(self._has_image)
         self._btn_reset_crop.setEnabled(self._has_image)
+        self._btn_calibrate_center.setEnabled(self._has_image)
+        self._btn_accept_center.setEnabled(
+            self._has_image and self._center_calibrating
+        )
+        self._btn_clear_template.setEnabled(
+            self._center_template_model is not None
+            and self._center_template_model.has_template()
+        )
         self._btn_measure.setEnabled(calibrated and self._has_image)
         self._grid_chk.setEnabled(calibrated)
         self._opacity_slider.setEnabled(calibrated)

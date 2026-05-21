@@ -1,9 +1,11 @@
 import numpy as np
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 
 from core.states.calibration_state import CalibrationState
+from core.states.center_template_state import CenterTemplateState
 from models.calibration_model import CalibrationModel
+from models.center_template_model import CenterTemplateModel
 from views.annomate.image_label import ImageLabel
 from views.annomate.viewport_actions import ViewportActionsBar
 
@@ -174,3 +176,55 @@ def test_center_crop_reset_restores_defaults(canvas, calibrated_model, qtbot):
     assert settings["opacity"] == 0.37
     assert settings["center_dot"] is False
     assert bar._crop_height_spin.value() == 605
+
+
+def test_center_template_actions_emit_requests(canvas, calibrated_model, qtbot):
+    template_model = CenterTemplateModel(CenterTemplateState())
+    bar = ViewportActionsBar(
+        canvas,
+        calibrated_model,
+        canvas,
+        center_template_model=template_model,
+    )
+    bar.set_image_loaded(True)
+    qtbot.addWidget(bar)
+
+    started = []
+    accepted = []
+    cleared = []
+    bar.center_calibration_started.connect(lambda: started.append(True))
+    bar.center_calibration_accepted.connect(lambda: accepted.append(True))
+    bar.center_template_cleared.connect(lambda: cleared.append(True))
+
+    qtbot.mouseClick(bar._btn_calibrate_center, Qt.LeftButton)
+    bar.set_center_calibrating(True)
+    qtbot.mouseClick(bar._btn_accept_center, Qt.LeftButton)
+
+    template_model.set_template(
+        "center_template.png",
+        "/tmp/center_template.png",
+        10,
+        10,
+        "circle",
+        1210,
+        1210,
+        50,
+        50,
+    )
+    qtbot.mouseClick(bar._btn_clear_template, Qt.LeftButton)
+
+    assert started == [True]
+    assert accepted == [True]
+    assert cleared == [True]
+
+
+def test_center_crop_drag_updates_original_center(canvas, calibrated_model, qtbot):
+    canvas.set_center_crop(enabled=True, center_dot=True, calibrating=True)
+    pos = QPoint(50, 50)
+    qtbot.mousePress(canvas, Qt.LeftButton, pos=pos)
+    qtbot.mouseMove(canvas, pos=pos)
+    qtbot.mouseRelease(canvas, Qt.LeftButton, pos=pos)
+
+    settings = canvas.center_crop_settings()
+    assert settings["center_x"] == pytest.approx(50.0)
+    assert settings["center_y"] == pytest.approx(50.0)

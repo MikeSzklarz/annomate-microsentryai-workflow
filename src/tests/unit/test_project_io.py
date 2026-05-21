@@ -5,6 +5,7 @@ from pathlib import Path
 
 from core.persistence.project_io import ProjectIO
 from core.states.dataset_state import DatasetState
+from core.states.center_template_state import CenterTemplateState
 from core.states.inference_state import InferenceState
 from core.states.validation_state import ValidationState
 
@@ -362,3 +363,79 @@ class TestProjectRoundTrip:
         assert raw["version"] == ProjectIO.SCHEMA_VERSION
         assert "created_at" in raw
         assert "modified_at" in raw
+
+    def test_center_template_metadata_round_trips(self, pio, tmp_path):
+        ds = _make_dataset(tmp_path)
+        proj_dir = tmp_path / "proj"
+        proj_dir.mkdir()
+        template = proj_dir / "center_template.png"
+        template.write_bytes(b"not a real image")
+
+        state = CenterTemplateState()
+        state.enabled = True
+        state.template_file = "center_template.png"
+        state.template_path = str(template)
+        state.anchor_x = 12
+        state.anchor_y = 14
+        state.crop_shape = "circle"
+        state.crop_width = 1210
+        state.crop_height = 1210
+        state.center_x = 50.0
+        state.center_y = 60.0
+
+        path = pio.save_project(
+            str(proj_dir),
+            "myproject",
+            ds,
+            ValidationState(),
+            InferenceState(),
+            center_template_state=state,
+        )
+
+        data = pio.load_project(path)
+        restored = CenterTemplateState()
+        pio.apply_project_to_states(
+            data,
+            DatasetState(),
+            ValidationState(),
+            InferenceState(),
+            center_template_state=restored,
+        )
+
+        assert restored.enabled is True
+        assert restored.template_file == "center_template.png"
+        assert restored.template_path == str(template)
+        assert restored.anchor_x == 12
+        assert restored.anchor_y == 14
+        assert restored.center_x == 50.0
+        assert restored.center_y == 60.0
+
+    def test_missing_center_template_disables_matching(self, pio, tmp_path):
+        ds = _make_dataset(tmp_path)
+        proj_dir = tmp_path / "proj"
+        state = CenterTemplateState()
+        state.enabled = True
+        state.template_file = "center_template.png"
+        state.template_path = str(proj_dir / "center_template.png")
+
+        path = pio.save_project(
+            str(proj_dir),
+            "myproject",
+            ds,
+            ValidationState(),
+            InferenceState(),
+            center_template_state=state,
+        )
+
+        data = pio.load_project(path)
+        restored = CenterTemplateState()
+        pio.apply_project_to_states(
+            data,
+            DatasetState(),
+            ValidationState(),
+            InferenceState(),
+            center_template_state=restored,
+        )
+
+        assert restored.enabled is False
+        assert restored.template_file == "center_template.png"

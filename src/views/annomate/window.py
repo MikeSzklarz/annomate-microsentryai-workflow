@@ -415,6 +415,9 @@ class AnnoMateWindow(QWidget):
         inference_model=None,
         inference_controller=None,
         calibration_model=None,
+        center_template_model=None,
+        center_template_controller=None,
+        project_controller=None,
         parent: QWidget = None,
     ) -> None:
         super().__init__(parent)
@@ -423,6 +426,9 @@ class AnnoMateWindow(QWidget):
         self.inference_model = inference_model
         self.inference_controller = inference_controller
         self._calib_model = calibration_model
+        self._center_template_model = center_template_model
+        self._center_template_controller = center_template_controller
+        self._project_controller = project_controller
         self._current_row: int = -1
         self._active_class: str = ""
         self._active_tool: str = ""
@@ -472,6 +478,15 @@ class AnnoMateWindow(QWidget):
         # Tool palette
         self.tool_palette.tool_selected.connect(self._on_tool_selected)
         self.viewport_actions.tool_selected.connect(self._on_tool_selected)
+        self.viewport_actions.center_calibration_started.connect(
+            self._on_center_calibration_started
+        )
+        self.viewport_actions.center_calibration_accepted.connect(
+            self._on_center_calibration_accepted
+        )
+        self.viewport_actions.center_template_cleared.connect(
+            self._on_center_template_cleared
+        )
         self.canvas.draw_attempted.connect(self._on_draw_attempted)
 
         # Route thickness signal directly to canvas setter
@@ -538,7 +553,10 @@ class AnnoMateWindow(QWidget):
         splitter.addWidget(self.canvas)
 
         self.viewport_actions = ViewportActionsBar(
-            self.canvas, self._calib_model, self.canvas
+            self.canvas,
+            self._calib_model,
+            self.canvas,
+            center_template_model=self._center_template_model,
         )
         self.viewport_actions.raise_()
 
@@ -659,6 +677,7 @@ class AnnoMateWindow(QWidget):
         self.canvas.set_image(
             bgr
         )  # always set the original; resets zoom (expected on new image)
+        self._apply_center_template_match(bgr)
         self.status_bar.set_zoom(
             1.0
         )  # set_image resets zoom without emitting zoom_changed
@@ -771,6 +790,129 @@ class AnnoMateWindow(QWidget):
                 "No Class Selected",
                 "Select an annotation class in the panel before drawing.",
             )
+
+    # ------------------------------------------------------------------ #
+    # Center template slots
+    # ------------------------------------------------------------------ #
+
+    def _on_center_calibration_started(self) -> None:
+        if self._current_bgr is None:
+            logger.debug("Center template calibration ignored: no image loaded.")
+            return
+        logger.info("Center template calibration started on row %d.", self._current_row)
+        self.canvas.set_tool(None)
+        self.tool_palette.deselect_all()
+        self.viewport_actions.set_active_tool("")
+        self._active_tool = ""
+        self.status_bar.set_tool("")
+        self.canvas.set_center_crop(
+            enabled=True,
+            center_dot=True,
+            calibrating=True,
+        )
+        self.viewport_actions.set_center_calibrating(True)
+
+    def _on_center_calibration_accepted(self) -> None:
+        if self._center_template_controller is None or self._current_bgr is None:
+            logger.debug(
+                "Center template accept ignored: controller=%s current_bgr=%s",
+                self._center_template_controller is not None,
+                self._current_bgr is not None,
+            )
+            return
+        if self._project_controller is None or not self._project_controller.project_dir:
+            logger.info("Center template accept requested before project was saved.")
+            QMessageBox.information(
+                self,
+                "Center Template",
+                "Save the project before accepting center calibration.",
+            )
+            return
+
+        settings = self.canvas.center_crop_settings()
+        center_x = settings.get("center_x")
+        center_y = settings.get("center_y")
+        if center_x is None or center_y is None:
+            h, w = self._current_bgr.shape[:2]
+            center_x = w / 2.0
+            center_y = h / 2.0
+        logger.info(
+            "Accepting center template calibration: row=%d center=(%.1f, %.1f) "
+            "shape=%s size=%sx%s",
+            self._current_row,
+            center_x,
+            center_y,
+            settings.get("shape") or "circle",
+            settings.get("width") or 1210,
+            settings.get("height") or 1210,
+        )
+
+        try:
+            self._center_template_controller.save_template(
+                self._project_controller.project_dir,
+                self._current_bgr,
+                center_x,
+                center_y,
+                settings.get("shape") or "circle",
+                settings.get("width") or 1210,
+                settings.get("height") or 1210,
+            )
+        except Exception as exc:
+            logger.warning("Center template save failed: %s", exc)
+            QMessageBox.warning(
+                self,
+                "Center Template",
+                f"Could not save center template:\n{exc}",
+            )
+            return
+
+        self.canvas.set_center_crop(calibrating=False)
+        self.viewport_actions.set_center_calibrating(False)
+
+    def _on_center_template_cleared(self) -> None:
+        if self._center_template_controller is None:
+            logger.debug("Center template clear ignored: no controller bound.")
+            return
+        logger.info("Center template cleared by user.")
+        self._center_template_controller.clear_template()
+        self.canvas.set_center_crop(calibrating=False)
+        self.viewport_actions.set_center_calibrating(False)
+
+    def _apply_center_template_match(self, bgr) -> None:
+        if (
+            self._center_template_controller is None
+            or self._center_template_model is None
+        ):
+            logger.debug("Skipping center template match: feature not wired.")
+            return
+        logger.debug("Applying center template match for row %d.", self._current_row)
+        result = self._center_template_controller.match_image(bgr)
+        if result is None:
+            logger.debug("Center template match produced no result for row %d.", self._current_row)
+            return
+        center_x, center_y, _score = result
+        crop = self._center_template_model.crop_settings()
+        logger.info(
+            "Applying matched center crop: row=%d center=(%.1f, %.1f) "
+            "shape=%s size=%sx%s",
+            self._current_row,
+            center_x,
+            center_y,
+            crop.get("shape") or "circle",
+            crop.get("width") or 1210,
+            crop.get("height") or 1210,
+        )
+        self.canvas.set_center_crop(
+            enabled=True,
+            shape=crop.get("shape") or "circle",
+            width=crop.get("width") or 1210,
+            height=crop.get("height") or 1210,
+            center_dot=True,
+            center_x=center_x,
+            center_y=center_y,
+            calibrating=False,
+        )
+        self.viewport_actions.set_center_calibrating(False)
 
     # ------------------------------------------------------------------ #
     # Annotation slots

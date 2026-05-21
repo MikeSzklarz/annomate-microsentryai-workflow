@@ -53,6 +53,7 @@ class ProjectIO:
         save_score_maps: bool = True,
         model_path: str = "",
         calibration_state=None,
+        center_template_state=None,
     ) -> str:
         """Write .annoproj + annotations.coco.json to project_dir.
 
@@ -154,6 +155,35 @@ class ProjectIO:
                 "grid_spacing_auto": cs.grid_spacing_auto,
             }
 
+        if center_template_state is not None:
+            ts = center_template_state
+            proj["center_template"] = {
+                "enabled": ts.enabled,
+                "template_file": self._make_relative_if_inside(
+                    ts.template_path or ts.template_file, project_dir
+                ),
+                "anchor_x": ts.anchor_x,
+                "anchor_y": ts.anchor_y,
+                "crop_shape": ts.crop_shape,
+                "crop_width": ts.crop_width,
+                "crop_height": ts.crop_height,
+                "center_x": ts.center_x,
+                "center_y": ts.center_y,
+            }
+            logger.debug(
+                "Project center template saved: enabled=%s file=%s "
+                "anchor=(%s, %s) crop=%s %sx%s center=(%s, %s)",
+                ts.enabled,
+                proj["center_template"]["template_file"],
+                ts.anchor_x,
+                ts.anchor_y,
+                ts.crop_shape,
+                ts.crop_width,
+                ts.crop_height,
+                ts.center_x,
+                ts.center_y,
+            )
+
         annoproj_path = os.path.join(project_dir, f"{project_name}.annoproj")
         with open(annoproj_path, "w", encoding="utf-8") as f:
             json.dump(proj, f, indent=2)
@@ -194,6 +224,11 @@ class ProjectIO:
             inf_data["model_path"] = self._resolve_path(
                 inf_data["model_path"], proj_dir
             )
+        tmpl_data = data.get("center_template", {})
+        if "template_file" in tmpl_data:
+            tmpl_data["_resolved_template_path"] = self._resolve_path(
+                tmpl_data.get("template_file", ""), proj_dir
+            )
 
         data["resolved_coco_path"] = self._resolve_coco_path(annoproj_path, data)
 
@@ -214,6 +249,7 @@ class ProjectIO:
         validation_state,
         inference_state,
         calibration_state=None,
+        center_template_state=None,
     ) -> None:
         """Mutate the three state objects from load_project() output.
 
@@ -309,6 +345,40 @@ class ProjectIO:
             calibration_state.grid_opacity = cdata.get("grid_opacity", 0.5)
             calibration_state.grid_spacing_world = cdata.get("grid_spacing_world", 1.0)
             calibration_state.grid_spacing_auto = cdata.get("grid_spacing_auto", True)
+
+        if center_template_state is not None:
+            tdata = project_data.get("center_template", {})
+            resolved_template_path = tdata.get("_resolved_template_path", "")
+            template_exists = bool(
+                resolved_template_path and os.path.exists(resolved_template_path)
+            )
+            center_template_state.enabled = bool(tdata.get("enabled", False))
+            center_template_state.template_file = tdata.get("template_file", "")
+            center_template_state.template_path = resolved_template_path
+            center_template_state.anchor_x = int(tdata.get("anchor_x", 0))
+            center_template_state.anchor_y = int(tdata.get("anchor_y", 0))
+            center_template_state.crop_shape = tdata.get("crop_shape", "circle")
+            center_template_state.crop_width = int(tdata.get("crop_width", 1210))
+            center_template_state.crop_height = int(tdata.get("crop_height", 1210))
+            center_template_state.center_x = tdata.get("center_x", None)
+            center_template_state.center_y = tdata.get("center_y", None)
+            center_template_state.last_score = None
+            if center_template_state.template_file and not template_exists:
+                center_template_state.enabled = False
+            logger.debug(
+                "Project center template loaded: enabled=%s file=%s exists=%s "
+                "anchor=(%s, %s) crop=%s %sx%s center=(%s, %s)",
+                center_template_state.enabled,
+                center_template_state.template_file,
+                template_exists,
+                center_template_state.anchor_x,
+                center_template_state.anchor_y,
+                center_template_state.crop_shape,
+                center_template_state.crop_width,
+                center_template_state.crop_height,
+                center_template_state.center_x,
+                center_template_state.center_y,
+            )
 
     # ------------------------------------------------------------------ #
     # COCO export / import

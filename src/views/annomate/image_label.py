@@ -76,6 +76,7 @@ class ImageLabel(QLabel):
         float, float, float, float
     )  # x1,y1,x2,y2 in original image coords
     calibrationPointsPlaced = Signal(tuple, tuple)  # (p1_orig, p2_orig)
+    centerCropChanged = Signal(dict)
 
     def __init__(self, parent: object = None) -> None:
         """Initialize ImageLabel with default zoom, pan, and annotation state.
@@ -103,6 +104,10 @@ class ImageLabel(QLabel):
         self._center_crop_height: Optional[int] = None
         self._center_crop_opacity: float = 0.37
         self._center_crop_dot_visible: bool = False
+        self._center_crop_center_x: Optional[float] = None
+        self._center_crop_center_y: Optional[float] = None
+        self._center_crop_calibrating: bool = False
+        self._dragging_center_crop: bool = False
 
         self._base_scale = 1.0
         self._zoom = 1.0
@@ -189,6 +194,9 @@ class ImageLabel(QLabel):
         self._sam_bbox_end = None
         self._sam_ghost = None
         self._pending_calib_pts = []
+        self._center_crop_center_x = None
+        self._center_crop_center_y = None
+        self._dragging_center_crop = False
         if self._calib_model is not None:
             self._calib_model.clear_measurement()
         self._ensure_center_crop_defaults(w, h)
@@ -256,6 +264,10 @@ class ImageLabel(QLabel):
         self._center_crop_enabled = False
         self._center_crop_width = None
         self._center_crop_height = None
+        self._center_crop_center_x = None
+        self._center_crop_center_y = None
+        self._center_crop_calibrating = False
+        self._dragging_center_crop = False
         self.current_polygon_points.clear()
         self._overlays = []
         self._ai_overlays = []
@@ -323,6 +335,9 @@ class ImageLabel(QLabel):
         shape: Optional[str] = None,
         opacity: Optional[float] = None,
         center_dot: Optional[bool] = None,
+        center_x: Optional[float] = None,
+        center_y: Optional[float] = None,
+        calibrating: Optional[bool] = None,
     ) -> None:
         """Set the centered crop preview mask drawn over the image.
 
@@ -349,7 +364,19 @@ class ImageLabel(QLabel):
             self._center_crop_opacity = max(0.0, min(1.0, float(opacity)))
         if center_dot is not None:
             self._center_crop_dot_visible = bool(center_dot)
+        if center_x is not None and img_w is not None:
+            self._center_crop_center_x = max(0.0, min(float(center_x), float(img_w)))
+        if center_y is not None and img_h is not None:
+            self._center_crop_center_y = max(0.0, min(float(center_y), float(img_h)))
+        if calibrating is not None:
+            self._center_crop_calibrating = bool(calibrating)
+            self._dragging_center_crop = False
+            if self._center_crop_calibrating:
+                self.setCursor(Qt.SizeAllCursor)
+            elif self.current_tool is None:
+                self.setCursor(Qt.ArrowCursor)
         self.update()
+        self.centerCropChanged.emit(self.center_crop_settings())
 
     def center_crop_settings(self) -> dict:
         """Return the current center crop preview settings."""
@@ -360,6 +387,9 @@ class ImageLabel(QLabel):
             "height": self._center_crop_height,
             "opacity": self._center_crop_opacity,
             "center_dot": self._center_crop_dot_visible,
+            "center_x": self._center_crop_center_x,
+            "center_y": self._center_crop_center_y,
+            "calibrating": self._center_crop_calibrating,
         }
 
     def _ensure_center_crop_defaults(self, img_w: int, img_h: int) -> None:
@@ -371,6 +401,28 @@ class ImageLabel(QLabel):
             self._center_crop_height = 1210
         else:
             self._center_crop_height = max(1, self._center_crop_height)
+        if self._center_crop_center_x is None:
+            self._center_crop_center_x = img_w / 2.0
+        else:
+            self._center_crop_center_x = max(
+                0.0, min(float(self._center_crop_center_x), float(img_w))
+            )
+        if self._center_crop_center_y is None:
+            self._center_crop_center_y = img_h / 2.0
+        else:
+            self._center_crop_center_y = max(
+                0.0, min(float(self._center_crop_center_y), float(img_h))
+            )
+
+    def _move_center_crop_to_view(self, pos_view: QPointF) -> None:
+        if self._orig_image_bgr is None:
+            return
+        img_h, img_w = self._orig_image_bgr.shape[:2]
+        x, y = self.display_to_original(self.view_to_display(pos_view))
+        self._center_crop_center_x = max(0.0, min(float(x), float(img_w)))
+        self._center_crop_center_y = max(0.0, min(float(y), float(img_h)))
+        self.update()
+        self.centerCropChanged.emit(self.center_crop_settings())
 
     def set_overlays(
         self, poly_list: List[Tuple[List[Tuple[float, float]], QColor]]
@@ -700,6 +752,16 @@ class ImageLabel(QLabel):
 
             pos_view = QPointF(event.pos())
 
+            if (
+                self._center_crop_calibrating
+                and self._center_crop_enabled
+                and self.current_tool is None
+            ):
+                self._dragging_center_crop = True
+                self._move_center_crop_to_view(pos_view)
+                event.accept()
+                return
+
             # --- SAM bbox tool: start rubber-band on press ---
             if self.current_tool == SAM_BBOX:
                 self._sam_bbox_start = self.view_to_display(pos_view)
@@ -784,6 +846,11 @@ class ImageLabel(QLabel):
         """
         self._mouse_pos = QPointF(event.pos())
 
+        if self._dragging_center_crop:
+            self._move_center_crop_to_view(self._mouse_pos)
+            event.accept()
+            return
+
         # --- SAM bbox rubber-band update ---
         if self.current_tool == SAM_BBOX and self._sam_bbox_start is not None:
             self._sam_bbox_end = self.view_to_display(self._mouse_pos)
@@ -834,7 +901,9 @@ class ImageLabel(QLabel):
             self.update()
             return
 
-        if self.current_tool is None and self._overlays:
+        if self._center_crop_calibrating and self.current_tool is None:
+            self.setCursor(Qt.SizeAllCursor)
+        elif self.current_tool is None and self._overlays:
             poly_i, _ = self._find_nearest_vertex(self._mouse_pos)
             self.setCursor(Qt.CrossCursor if poly_i != -1 else Qt.ArrowCursor)
 
@@ -850,6 +919,11 @@ class ImageLabel(QLabel):
             event (QMouseEvent): The mouse release event.
         """
         if event.button() == Qt.LeftButton:
+            if self._dragging_center_crop:
+                self._dragging_center_crop = False
+                event.accept()
+                return
+
             # --- SAM bbox complete: clear rubber-band and emit original-coords bbox ---
             if self.current_tool == SAM_BBOX and self._sam_bbox_start is not None:
                 end = self.view_to_display(QPointF(event.pos()))
@@ -1231,8 +1305,18 @@ class ImageLabel(QLabel):
             diameter = min(crop_w, crop_h)
             crop_w = crop_h = diameter
 
-        x = ((img_w - crop_w) / 2.0) * self._base_scale
-        y = ((img_h - crop_h) / 2.0) * self._base_scale
+        center_x = (
+            self._center_crop_center_x
+            if self._center_crop_center_x is not None
+            else img_w / 2.0
+        )
+        center_y = (
+            self._center_crop_center_y
+            if self._center_crop_center_y is not None
+            else img_h / 2.0
+        )
+        x = (center_x - crop_w / 2.0) * self._base_scale
+        y = (center_y - crop_h / 2.0) * self._base_scale
         w = crop_w * self._base_scale
         h = crop_h * self._base_scale
         crop_rect = QRectF(x, y, w, h)
@@ -1258,8 +1342,8 @@ class ImageLabel(QLabel):
         else:
             painter.drawRect(crop_rect)
         if self._center_crop_dot_visible:
-            cx = (img_w / 2.0) * self._base_scale
-            cy = (img_h / 2.0) * self._base_scale
+            cx = center_x * self._base_scale
+            cy = center_y * self._base_scale
             radius = 4.0 / self._zoom
             painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(QColor(255, 0, 0, 170)))
