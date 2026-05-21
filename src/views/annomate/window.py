@@ -995,7 +995,8 @@ class AnnoMateWindow(QWidget):
                 a["polygon"],
                 QColor(*self.dataset_model.get_class_color(a["category_name"])),
                 a.get("thickness", 2.0),
-                self.dataset_model.is_class_visible(a["category_name"]),
+                self.dataset_model.is_class_visible(a["category_name"])
+                and a.get("visible", True),
             )
             for a in annos
         ]
@@ -1172,7 +1173,8 @@ class AnnoMateWindow(QWidget):
                 a["polygon"],
                 QColor(*self.dataset_model.get_class_color(a["category_name"])),
                 a.get("thickness", 2.0),
-                self.dataset_model.is_class_visible(a["category_name"]),
+                self.dataset_model.is_class_visible(a["category_name"])
+                and a.get("visible", True),
             )
             for a in annos
         ]
@@ -1255,7 +1257,8 @@ class AnnoMateWindow(QWidget):
                 a["polygon"],
                 QColor(*self.dataset_model.get_class_color(a["category_name"])),
                 a.get("thickness", 2.0),
-                self.dataset_model.is_class_visible(a["category_name"]),
+                self.dataset_model.is_class_visible(a["category_name"])
+                and a.get("visible", True),
             )
             for a in annos
         ]

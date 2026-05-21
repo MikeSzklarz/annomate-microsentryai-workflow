@@ -46,7 +46,10 @@ def test_annotations_section_uses_sortable_table_view(annotations_section):
     assert widget.findChild(QTableView) is widget._table
     assert widget._table.isSortingEnabled()
     assert widget._table_model.headerData(AnnotationColumns.COLOR, Qt.Horizontal) == ""
-    assert widget._table_model.headerData(AnnotationColumns.VERTICES, Qt.Horizontal) == "Vtx"
+    assert (
+        widget._table_model.headerData(AnnotationColumns.VERTICES, Qt.Horizontal)
+        == "Points"
+    )
     assert (
         widget._table.horizontalHeader().sortIndicatorSection()
         == AnnotationColumns.CLASS
@@ -75,6 +78,23 @@ def test_deleting_annotation_after_sort_targets_source_index(annotations_section
     annos = model.get_annotations(0)
     assert len(annos) == 2
     assert [anno["category_name"] for anno in annos] == ["Crack", "Void"]
+
+
+def test_visibility_button_after_sort_targets_source_index(annotations_section, qtbot):
+    widget, model = annotations_section
+    widget._proxy.sort(AnnotationColumns.CLASS, Qt.AscendingOrder)
+    index = _proxy_index_for_annotation(widget, 0, AnnotationColumns.VISIBILITY)
+
+    _click_index(qtbot, widget, index)
+
+    assert model.get_annotations(0)[0]["visible"] is False
+    assert model.get_annotations(0)[1].get("visible", True) is True
+    assert model.get_annotations(0)[2].get("visible", True) is True
+
+    index = _proxy_index_for_annotation(widget, 0, AnnotationColumns.VISIBILITY)
+    _click_index(qtbot, widget, index)
+
+    assert model.get_annotations(0)[0]["visible"] is True
 
 
 def test_annotations_table_expands_to_show_all_rows(annotations_section, qtbot):

@@ -4,6 +4,7 @@ class TestAnnotationCRUD:
         state.add_annotation("img.jpg", "Defect", [(0, 0), (1, 0), (1, 1)])
         assert len(state.annotations["img.jpg"]) == 1
         assert state.annotations["img.jpg"][0]["category_name"] == "Defect"
+        assert state.annotations["img.jpg"][0]["visible"] is True
 
     def test_delete_annotation(self, state):
         state.annotations["img.jpg"] = [
@@ -23,6 +24,13 @@ class TestAnnotationCRUD:
         new_pts = [(5, 5), (6, 5), (6, 6)]
         state.update_annotation_points("img.jpg", 0, new_pts)
         assert state.annotations["img.jpg"][0]["polygon"] == new_pts
+
+    def test_set_annotation_visible(self, state):
+        state.add_annotation("img.jpg", "Defect", [(0, 0), (1, 0), (1, 1)])
+
+        state.set_annotation_visible("img.jpg", 0, False)
+
+        assert state.is_annotation_visible("img.jpg", 0) is False
 
 
 class TestClassRegistry:

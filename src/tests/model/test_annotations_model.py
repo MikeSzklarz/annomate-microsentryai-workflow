@@ -3,6 +3,7 @@ from PySide6.QtCore import Qt
 from core.states.dataset_state import DatasetState
 from models.annotations_model import (
     ANNOTATION_INDEX_ROLE,
+    VISIBLE_ROLE,
     AnnotationColumns,
     AnnotationSortProxyModel,
     AnnotationTableModel,
@@ -38,6 +39,27 @@ def test_annotation_rows_reflect_current_image_annotations():
     assert table_model.rowCount() == 3
     assert table_model.index(0, AnnotationColumns.CLASS).data() == "Beta"
     assert table_model.index(1, AnnotationColumns.VERTICES).data() == "4"
+
+
+def test_visibility_column_reflects_annotation_state():
+    dataset_model = _make_model()
+    table_model = AnnotationTableModel(dataset_model)
+    table_model.set_current_row(0)
+    index = table_model.index(0, AnnotationColumns.VISIBILITY)
+
+    assert index.data(VISIBLE_ROLE) is True
+    assert index.data(Qt.DisplayRole) == "Hide"
+
+    dataset_model.set_annotation_visible(0, 0, False)
+
+    assert (
+        table_model.index(0, AnnotationColumns.VISIBILITY).data(VISIBLE_ROLE)
+        is False
+    )
+    assert (
+        table_model.index(0, AnnotationColumns.VISIBILITY).data(Qt.DisplayRole)
+        == "Show"
+    )
 
 
 def test_class_name_sort_is_case_insensitive():

@@ -1,5 +1,5 @@
 from PySide6.QtCore import QItemSelectionModel, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from models.annotations_model import (
     ANNOTATION_INDEX_ROLE,
     COLOR_ROLE,
+    VISIBLE_ROLE,
     AnnotationColumns,
     AnnotationSortProxyModel,
     AnnotationTableModel,
@@ -29,6 +30,7 @@ from models.annotations_model import (
 _COLOR_COL_W = 44
 _DOT_W = 16
 _COUNT_W = 52
+_VISIBILITY_W = 40
 _DELETE_W = 40
 _NAME_MIN_W = 70
 
@@ -91,8 +93,12 @@ class _ColorDotDelegate(QStyledItemDelegate):
         painter.restore()
 
 
-class _DeleteButtonDelegate(QStyledItemDelegate):
-    """Paint delete cells with a button frame and trash icon."""
+class _IconButtonDelegate(QStyledItemDelegate):
+    """Paint action cells with a button frame and compact icon."""
+
+    def __init__(self, action: str, parent=None) -> None:
+        super().__init__(parent)
+        self._action = action
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
         opt = QStyleOptionViewItem(option)
@@ -111,7 +117,49 @@ class _DeleteButtonDelegate(QStyledItemDelegate):
             button.state |= QStyle.State_MouseOver
         style.drawControl(QStyle.CE_PushButton, button, painter)
 
-        self._paint_trash_icon(painter, QRectF(button.rect).adjusted(9, 7, -9, -7), opt)
+        if self._action == "visibility":
+            self._paint_eye_icon(
+                painter, QRectF(button.rect).adjusted(8, 8, -8, -8), opt, index
+            )
+        else:
+            self._paint_trash_icon(
+                painter, QRectF(button.rect).adjusted(9, 7, -9, -7), opt
+            )
+
+    def _paint_eye_icon(
+        self, painter: QPainter, rect: QRectF, opt, index
+    ) -> None:
+        center = rect.center()
+        eye = QPainterPath()
+        eye.moveTo(rect.left(), center.y())
+        eye.cubicTo(
+            rect.left() + rect.width() * 0.25,
+            rect.top(),
+            rect.right() - rect.width() * 0.25,
+            rect.top(),
+            rect.right(),
+            center.y(),
+        )
+        eye.cubicTo(
+            rect.right() - rect.width() * 0.25,
+            rect.bottom(),
+            rect.left() + rect.width() * 0.25,
+            rect.bottom(),
+            rect.left(),
+            center.y(),
+        )
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(QPen(opt.palette.buttonText().color(), 1.4))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(eye)
+        painter.setBrush(painter.pen().color())
+        radius = max(2.0, min(rect.width(), rect.height()) * 0.18)
+        painter.drawEllipse(center, radius, radius)
+        painter.setBrush(Qt.NoBrush)
+        if not bool(index.data(VISIBLE_ROLE)):
+            painter.drawLine(rect.topRight(), rect.bottomLeft())
+        painter.restore()
 
     def _paint_trash_icon(self, painter: QPainter, rect: QRectF, opt) -> None:
         w = rect.width()
@@ -191,7 +239,10 @@ class AnnotationsSection(QWidget):
             _AnnotationClassDelegate(self._table_model, self._table),
         )
         self._table.setItemDelegateForColumn(
-            AnnotationColumns.DELETE, _DeleteButtonDelegate(self._table)
+            AnnotationColumns.VISIBILITY, _IconButtonDelegate("visibility", self._table)
+        )
+        self._table.setItemDelegateForColumn(
+            AnnotationColumns.DELETE, _IconButtonDelegate("delete", self._table)
         )
         self._table.setFrameShape(QFrame.NoFrame)
         self._table.setAlternatingRowColors(True)
@@ -240,10 +291,12 @@ class AnnotationsSection(QWidget):
         header.setSectionResizeMode(AnnotationColumns.COLOR, QHeaderView.Fixed)
         header.setSectionResizeMode(AnnotationColumns.CLASS, QHeaderView.Stretch)
         header.setSectionResizeMode(AnnotationColumns.VERTICES, QHeaderView.Fixed)
+        header.setSectionResizeMode(AnnotationColumns.VISIBILITY, QHeaderView.Fixed)
         header.setSectionResizeMode(AnnotationColumns.DELETE, QHeaderView.Fixed)
         self._table.setColumnWidth(AnnotationColumns.COLOR, _COLOR_COL_W)
         self._table.setColumnWidth(AnnotationColumns.CLASS, _NAME_MIN_W)
         self._table.setColumnWidth(AnnotationColumns.VERTICES, _COUNT_W)
+        self._table.setColumnWidth(AnnotationColumns.VISIBILITY, _VISIBILITY_W)
         self._table.setColumnWidth(AnnotationColumns.DELETE, _DELETE_W)
         self._table.sortByColumn(AnnotationColumns.CLASS, Qt.AscendingOrder)
         self._sync_table_height()
@@ -274,6 +327,9 @@ class AnnotationsSection(QWidget):
             return
 
         column = proxy_index.column()
+        if column == AnnotationColumns.VISIBILITY:
+            self._toggle_visibility(idx)
+            return
         if column == AnnotationColumns.DELETE:
             self._delete_annotation(idx)
             return
@@ -322,6 +378,9 @@ class AnnotationsSection(QWidget):
         elif self._selected_idx > idx:
             self._selected_idx -= 1
         self.dataset_model.delete_annotation(self._current_row, idx)
+
+    def _toggle_visibility(self, idx: int) -> None:
+        self.dataset_model.toggle_annotation_visibility(self._current_row, idx)
 
     def _on_model_reset(self) -> None:
         if self._selected_idx >= self._table_model.rowCount():

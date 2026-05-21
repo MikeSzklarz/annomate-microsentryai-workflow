@@ -237,6 +237,23 @@ class DatasetTableModel(QAbstractTableModel):
         )
         self._emit_row(row)
 
+    def set_annotation_visible(
+        self, row: int, annotation_idx: int, visible: bool
+    ) -> None:
+        """Set whether a specific annotation renders in the viewport."""
+        if not (0 <= row < self.rowCount()):
+            return
+        self.state.set_annotation_visible(
+            self.state.image_files[row], annotation_idx, visible
+        )
+        self._emit_row(row)
+
+    def toggle_annotation_visibility(self, row: int, annotation_idx: int) -> bool:
+        """Toggle annotation viewport visibility and return the new state."""
+        visible = not self.is_annotation_visible(row, annotation_idx)
+        self.set_annotation_visible(row, annotation_idx, visible)
+        return visible
+
     def set_inspector(self, row: int, value: str) -> None:
         """Assign an inspector name to the image at *row*.
 
@@ -387,6 +404,14 @@ class DatasetTableModel(QAbstractTableModel):
         if not (0 <= row < self.rowCount()):
             return []
         return self.state.annotations.get(self.state.image_files[row], [])
+
+    def is_annotation_visible(self, row: int, annotation_idx: int) -> bool:
+        """Return whether a specific annotation should render."""
+        if not (0 <= row < self.rowCount()):
+            return True
+        return self.state.is_annotation_visible(
+            self.state.image_files[row], annotation_idx
+        )
 
     def get_class_names(self) -> list:
         """Return a copy of the ordered class name registry.

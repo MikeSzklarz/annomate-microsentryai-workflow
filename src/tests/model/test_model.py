@@ -75,6 +75,15 @@ class TestQueryAPI:
         assert model.is_class_visible("Defect") is False
         assert model.toggle_class_visibility("Defect") is True
 
+    def test_annotation_visibility_defaults_visible_and_toggles(self, model):
+        model.load_folder("/fake", ["img.jpg"])
+        model.add_annotation(0, "Defect", [(0, 0), (1, 0), (1, 1)])
+
+        assert model.is_annotation_visible(0, 0) is True
+        assert model.toggle_annotation_visibility(0, 0) is False
+        assert model.is_annotation_visible(0, 0) is False
+        assert model.toggle_annotation_visibility(0, 0) is True
+
     def test_get_inspector_empty_initially(self, model):
         model.load_folder("/fake", ["img.jpg"])
         assert model.get_inspector(0) == ""

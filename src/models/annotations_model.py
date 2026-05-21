@@ -5,18 +5,21 @@ class AnnotationColumns:
     COLOR = 0
     CLASS = 1
     VERTICES = 2
-    DELETE = 3
+    VISIBILITY = 3
+    DELETE = 4
 
 
 ANNOTATION_INDEX_ROLE = Qt.UserRole + 11
 SORT_ROLE = Qt.UserRole + 12
 COLOR_ROLE = Qt.UserRole + 13
+VISIBLE_ROLE = Qt.UserRole + 14
 
-_HEADERS = ["", "Class", "Vtx", ""]
+_HEADERS = ["", "Class", "Points", "", ""]
 _TOOLTIPS = {
     AnnotationColumns.COLOR: "Annotation class color",
     AnnotationColumns.CLASS: "Annotation class",
-    AnnotationColumns.VERTICES: "Vertex count",
+    AnnotationColumns.VERTICES: "Point count",
+    AnnotationColumns.VISIBILITY: "Show or hide this annotation",
     AnnotationColumns.DELETE: "Delete annotation",
 }
 
@@ -75,6 +78,8 @@ class AnnotationTableModel(QAbstractTableModel):
             return self.sort_value(row, col)
         if role == COLOR_ROLE and col == AnnotationColumns.COLOR:
             return self._dataset_model.get_class_color(name)
+        if role == VISIBLE_ROLE:
+            return annotation.get("visible", True)
         if role in (Qt.DisplayRole, Qt.EditRole):
             return self._display(annotation, col)
         if role == Qt.ToolTipRole:
@@ -151,6 +156,8 @@ class AnnotationTableModel(QAbstractTableModel):
             return annotation["category_name"]
         if col == AnnotationColumns.VERTICES:
             return str(len(annotation.get("polygon", [])))
+        if col == AnnotationColumns.VISIBILITY:
+            return "Hide" if annotation.get("visible", True) else "Show"
         if col == AnnotationColumns.DELETE:
             return "Delete"
         return ""
@@ -162,12 +169,19 @@ class AnnotationTableModel(QAbstractTableModel):
             return f"{name}: rgb({r}, {g}, {b})"
         if col == AnnotationColumns.DELETE:
             return "Delete annotation"
+        if col == AnnotationColumns.VISIBILITY:
+            action = "Hide" if annotation.get("visible", True) else "Show"
+            return f"{action} annotation"
         return self._display(annotation, col) or (_TOOLTIPS.get(col) or "")
 
     def _alignment(self, col: int) -> Qt.AlignmentFlag:
         if col == AnnotationColumns.VERTICES:
             return Qt.AlignRight | Qt.AlignVCenter
-        if col in (AnnotationColumns.COLOR, AnnotationColumns.DELETE):
+        if col in (
+            AnnotationColumns.COLOR,
+            AnnotationColumns.VISIBILITY,
+            AnnotationColumns.DELETE,
+        ):
             return Qt.AlignCenter
         return Qt.AlignLeft | Qt.AlignVCenter
 

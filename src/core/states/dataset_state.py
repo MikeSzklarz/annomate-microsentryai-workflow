@@ -84,7 +84,12 @@ class DatasetState:
             thickness (float): Line thickness for the annotation (default: 2.0).
         """
         self.annotations.setdefault(image_name, []).append(
-            {"category_name": category, "polygon": polygon, "thickness": thickness}
+            {
+                "category_name": category,
+                "polygon": polygon,
+                "thickness": thickness,
+                "visible": True,
+            }
         )
 
     def update_annotation_thickness(
@@ -129,6 +134,21 @@ class DatasetState:
         annos = self.annotations.get(image_name, [])
         if 0 <= index < len(annos):
             annos[index]["polygon"] = points
+
+    def set_annotation_visible(
+        self, image_name: str, index: int, visible: bool
+    ) -> None:
+        """Set viewport visibility for a specific annotation."""
+        annos = self.annotations.get(image_name, [])
+        if 0 <= index < len(annos):
+            annos[index]["visible"] = bool(visible)
+
+    def is_annotation_visible(self, image_name: str, index: int) -> bool:
+        """Return whether a specific annotation should render in the viewport."""
+        annos = self.annotations.get(image_name, [])
+        if 0 <= index < len(annos):
+            return annos[index].get("visible", True)
+        return True
 
     # --- Class Registry ---
 
