@@ -170,7 +170,7 @@ class AnnotationTableModel(QAbstractTableModel):
         if col == AnnotationColumns.VERTICES:
             return str(len(annotation.get("polygon", [])))
         if col == AnnotationColumns.AREA:
-            return f"{self._area_value(annotation):.4g}"
+            return self._format_area_value(self._area_value(annotation))
         if col == AnnotationColumns.VISIBILITY:
             return "Hide" if annotation.get("visible", True) else "Show"
         if col == AnnotationColumns.DELETE:
@@ -205,6 +205,12 @@ class AnnotationTableModel(QAbstractTableModel):
         if self._calibration_model is not None and self._calibration_model.has_scale():
             scale = float(self._calibration_model.scale())
         return polygon_area(annotation.get("polygon", [])) * scale * scale
+
+    def _format_area_value(self, area: float) -> str:
+        rounded = round(area)
+        if abs(rounded) < 1_000_000:
+            return str(rounded)
+        return f"{rounded:.6g}"
 
     def _area_unit(self) -> str:
         if self._calibration_model is None or not self._calibration_model.has_scale():

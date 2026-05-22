@@ -111,7 +111,33 @@ def test_area_recalculates_with_calibration():
     assert calibration_model.apply_calibration(5.0, "mm")
 
     assert table_model.headerData(AnnotationColumns.AREA, Qt.Horizontal) == "Area (mm)"
-    assert table_model.index(1, AnnotationColumns.AREA).data() == "0.01"
+    assert table_model.index(1, AnnotationColumns.AREA).data() == "0"
+
+
+def test_area_rounds_to_whole_numbers_before_scientific_notation():
+    dataset_model = DatasetTableModel(DatasetState())
+    dataset_model.add_class("Beta", (20, 20, 20))
+    dataset_model.load_folder("/fake", ["one.jpg"])
+    dataset_model.add_annotation(
+        0, "Beta", [(0, 0), (123456, 0), (123456, 1), (0, 1)]
+    )
+    table_model = AnnotationTableModel(dataset_model)
+    table_model.set_current_row(0)
+
+    assert table_model.index(0, AnnotationColumns.AREA).data() == "123456"
+
+
+def test_area_switches_to_scientific_notation_after_six_digits():
+    dataset_model = DatasetTableModel(DatasetState())
+    dataset_model.add_class("Beta", (20, 20, 20))
+    dataset_model.load_folder("/fake", ["one.jpg"])
+    dataset_model.add_annotation(
+        0, "Beta", [(0, 0), (1234567, 0), (1234567, 1), (0, 1)]
+    )
+    table_model = AnnotationTableModel(dataset_model)
+    table_model.set_current_row(0)
+
+    assert table_model.index(0, AnnotationColumns.AREA).data() == "1.23457e+06"
 
 
 def test_class_column_updates_source_annotation():
