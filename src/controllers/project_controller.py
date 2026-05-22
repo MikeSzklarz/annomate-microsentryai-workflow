@@ -94,6 +94,9 @@ class ProjectController(QObject):
         # suppresses spurious dirty events fired during our own load sequence.
         self._dataset_model.dataChanged.connect(self._on_model_changed)
         self._dataset_model.modelReset.connect(self._on_model_changed)
+        if self._calibration_model is not None:
+            self._calibration_model.calibration_changed.connect(self._on_model_changed)
+            self._calibration_model.grid_changed.connect(self._on_model_changed)
         if self._center_template_model is not None:
             self._center_template_model.template_changed.connect(self._on_model_changed)
 
@@ -161,6 +164,8 @@ class ProjectController(QObject):
 
         self._loading = True
         try:
+            if self._calibration_model is not None:
+                self._calibration_model.clear_calibration()
             self._dataset_model.beginResetModel()
             self._dataset_model.endResetModel()
         finally:

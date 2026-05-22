@@ -100,15 +100,18 @@ def test_calibrate_and_measure_emit_tool_requests(canvas, calibrated_model, qtbo
     assert not bar._btn_measure.isChecked()
 
 
-def test_measure_and_grid_settings_disabled_until_calibrated(canvas, qtbot):
+def test_measure_and_grid_settings_enabled_in_default_pixel_mode(canvas, qtbot):
     model = CalibrationModel(CalibrationState())
     bar = ViewportActionsBar(canvas, model, canvas)
     bar.set_image_loaded(True)
     qtbot.addWidget(bar)
 
     assert bar._btn_calibrate.isEnabled()
-    assert not bar._btn_measure.isEnabled()
-    assert not bar._grid_chk.isEnabled()
+    assert bar._btn_measure.isEnabled()
+    assert bar._grid_chk.isEnabled()
+    assert model.grid_visible() is True
+    assert bar._grid_chk.isChecked()
+    assert "px/px" in bar._status_lbl.text()
 
     model.set_calib_points((0.0, 0.0), (100.0, 0.0))
     assert model.apply_calibration(5.0, "mm")
@@ -132,6 +135,7 @@ def test_grid_toggle_in_settings_updates_model(canvas, calibrated_model, qtbot):
 
 def test_settings_controls_update_calibration_model(canvas, calibrated_model, qtbot):
     bar = ViewportActionsBar(canvas, calibrated_model, canvas)
+    bar.set_image_loaded(True)
     qtbot.addWidget(bar)
 
     bar._opacity_slider.setValue(75)
@@ -151,8 +155,10 @@ def test_settings_controls_update_calibration_model(canvas, calibrated_model, qt
 
     qtbot.mouseClick(bar._btn_reset_calibration, Qt.LeftButton)
     assert calibrated_model.is_calibrated() is False
-    assert not bar._btn_measure.isEnabled()
-    assert not bar._grid_chk.isEnabled()
+    assert calibrated_model.has_scale() is True
+    assert calibrated_model.unit() == "px"
+    assert bar._btn_measure.isEnabled()
+    assert bar._grid_chk.isEnabled()
 
 
 def test_center_crop_controls_update_canvas(canvas, calibrated_model, qtbot):

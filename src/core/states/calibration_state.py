@@ -3,17 +3,18 @@ class CalibrationState:
 
     def __init__(self) -> None:
         # Calibration reference (original image coords)
-        self.scale: float | None = None  # world units per original image pixel
-        self.unit: str = "mm"
+        self.scale: float | None = 1.0  # current units per original image pixel
+        self.unit: str = "px"
+        self.user_calibrated: bool = False
         self.calib_p1: tuple | None = None  # (x, y) in original pixels
         self.calib_p2: tuple | None = None  # (x, y) in original pixels
         self.real_distance: float = 1.0  # known real-world distance
 
         # Grid appearance
-        self.grid_visible: bool = False
+        self.grid_visible: bool = True
         self.grid_color: tuple = (58, 90, 122)  # (r, g, b)
         self.grid_opacity: float = 0.5  # 0.0–1.0
-        self.grid_spacing_world: float = 1.0  # world units per grid step
+        self.grid_spacing_world: float = 100.0  # current units per grid step
         self.grid_spacing_auto: bool = True  # recompute on calibration
 
         # Measurement points — session-only, never persisted
@@ -21,13 +22,21 @@ class CalibrationState:
         self.meas_p2: tuple | None = None
 
     def is_calibrated(self) -> bool:
+        return self.user_calibrated
+
+    def has_scale(self) -> bool:
         return self.scale is not None
 
     def clear_calibration(self) -> None:
-        self.scale = None
+        self.scale = 1.0
+        self.unit = "px"
+        self.user_calibrated = False
         self.calib_p1 = None
         self.calib_p2 = None
         self.real_distance = 1.0
+        self.grid_visible = True
+        if self.grid_spacing_auto:
+            self.grid_spacing_world = 100.0
         self.meas_p1 = None
         self.meas_p2 = None
 

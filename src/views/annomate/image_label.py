@@ -743,7 +743,7 @@ class ImageLabel(QLabel):
 
             # --- Measure tool ---
             if self.current_tool == MEASURE:
-                if self._calib_model is None or not self._calib_model.is_calibrated():
+                if self._calib_model is None or not self._calib_model.has_scale():
                     return
                 pos_view = QPointF(event.pos())
                 pos_disp = self.view_to_display(pos_view)
@@ -1082,7 +1082,7 @@ class ImageLabel(QLabel):
     def _paint_grid(self, painter: QPainter) -> None:
         """Draw grid lines fixed to the viewport in screen coordinates."""
         m = self._calib_model
-        if m is None or not m.grid_visible() or not m.is_calibrated():
+        if m is None or not m.grid_visible() or not m.has_scale():
             return
         step_world = m.grid_spacing_world()
         if step_world <= 0:

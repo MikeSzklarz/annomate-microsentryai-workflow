@@ -1,12 +1,15 @@
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
 
+from core.utils.geometry import polygon_area
+
 
 class AnnotationColumns:
     COLOR = 0
     CLASS = 1
     VERTICES = 2
-    VISIBILITY = 3
-    DELETE = 4
+    AREA = 3
+    VISIBILITY = 4
+    DELETE = 5
 
 
 ANNOTATION_INDEX_ROLE = Qt.UserRole + 11
@@ -14,11 +17,12 @@ SORT_ROLE = Qt.UserRole + 12
 COLOR_ROLE = Qt.UserRole + 13
 VISIBLE_ROLE = Qt.UserRole + 14
 
-_HEADERS = ["", "Class", "Points", "", ""]
+_HEADERS = ["", "Class", "Points", "Area", "", ""]
 _TOOLTIPS = {
     AnnotationColumns.COLOR: "Annotation class color",
     AnnotationColumns.CLASS: "Annotation class",
     AnnotationColumns.VERTICES: "Point count",
+    AnnotationColumns.AREA: "Polygon area in current calibration units",
     AnnotationColumns.VISIBILITY: "Show or hide this annotation",
     AnnotationColumns.DELETE: "Delete annotation",
 }
@@ -27,12 +31,17 @@ _TOOLTIPS = {
 class AnnotationTableModel(QAbstractTableModel):
     """Read/edit table model for annotations on the current image."""
 
-    def __init__(self, dataset_model, parent=None) -> None:
+    def __init__(self, dataset_model, calibration_model=None, parent=None) -> None:
         super().__init__(parent)
         self._dataset_model = dataset_model
+        self._calibration_model = calibration_model
         self._current_row = -1
         self._annotations = []
         self._dataset_model.dataChanged.connect(self._on_dataset_data_changed)
+        if self._calibration_model is not None:
+            self._calibration_model.calibration_changed.connect(
+                self._on_calibration_changed
+            )
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         if parent.isValid():
@@ -58,6 +67,8 @@ class AnnotationTableModel(QAbstractTableModel):
         if orientation != Qt.Horizontal or not (0 <= section < len(_HEADERS)):
             return None
         if role == Qt.DisplayRole:
+            if section == AnnotationColumns.AREA:
+                return f"Area ({self._area_unit()})"
             return _HEADERS[section]
         if role == Qt.ToolTipRole:
             return _TOOLTIPS.get(section)
@@ -135,6 +146,8 @@ class AnnotationTableModel(QAbstractTableModel):
             return annotation["category_name"].casefold()
         if col == AnnotationColumns.VERTICES:
             return len(annotation.get("polygon", []))
+        if col == AnnotationColumns.AREA:
+            return self._area_value(annotation)
         return row
 
     def tie_break_value(self, row: int) -> int:
@@ -156,6 +169,8 @@ class AnnotationTableModel(QAbstractTableModel):
             return annotation["category_name"]
         if col == AnnotationColumns.VERTICES:
             return str(len(annotation.get("polygon", [])))
+        if col == AnnotationColumns.AREA:
+            return f"{self._area_value(annotation):.4g}"
         if col == AnnotationColumns.VISIBILITY:
             return "Hide" if annotation.get("visible", True) else "Show"
         if col == AnnotationColumns.DELETE:
@@ -175,7 +190,7 @@ class AnnotationTableModel(QAbstractTableModel):
         return self._display(annotation, col) or (_TOOLTIPS.get(col) or "")
 
     def _alignment(self, col: int) -> Qt.AlignmentFlag:
-        if col == AnnotationColumns.VERTICES:
+        if col in (AnnotationColumns.VERTICES, AnnotationColumns.AREA):
             return Qt.AlignRight | Qt.AlignVCenter
         if col in (
             AnnotationColumns.COLOR,
@@ -184,6 +199,29 @@ class AnnotationTableModel(QAbstractTableModel):
         ):
             return Qt.AlignCenter
         return Qt.AlignLeft | Qt.AlignVCenter
+
+    def _area_value(self, annotation: dict) -> float:
+        scale = 1.0
+        if self._calibration_model is not None and self._calibration_model.has_scale():
+            scale = float(self._calibration_model.scale())
+        return polygon_area(annotation.get("polygon", [])) * scale * scale
+
+    def _area_unit(self) -> str:
+        if self._calibration_model is None or not self._calibration_model.has_scale():
+            return "px"
+        return self._calibration_model.unit()
+
+    def _on_calibration_changed(self) -> None:
+        self.headerDataChanged.emit(
+            Qt.Horizontal, AnnotationColumns.AREA, AnnotationColumns.AREA
+        )
+        if self.rowCount() == 0:
+            return
+        self.dataChanged.emit(
+            self.index(0, AnnotationColumns.AREA),
+            self.index(self.rowCount() - 1, AnnotationColumns.AREA),
+            [Qt.DisplayRole, SORT_ROLE, Qt.ToolTipRole],
+        )
 
 
 class AnnotationSortProxyModel(QSortFilterProxyModel):

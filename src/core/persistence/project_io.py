@@ -145,6 +145,7 @@ class ProjectIO:
             proj["calibration"] = {
                 "scale": cs.scale,
                 "unit": cs.unit,
+                "user_calibrated": cs.user_calibrated,
                 "calib_p1": list(cs.calib_p1) if cs.calib_p1 else None,
                 "calib_p2": list(cs.calib_p2) if cs.calib_p2 else None,
                 "real_distance": cs.real_distance,
@@ -335,18 +336,42 @@ class ProjectIO:
         # Calibration (optional — absent in old project files)
         if calibration_state is not None:
             cdata = project_data.get("calibration", {})
-            calibration_state.scale = cdata.get("scale", None)
-            calibration_state.unit = cdata.get("unit", "mm")
+            using_default_pixel_scale = not cdata
+            if not cdata:
+                calibration_state.clear_calibration()
+            else:
+                scale = cdata.get("scale", None)
+                using_default_pixel_scale = scale is None
+                if scale is None:
+                    calibration_state.clear_calibration()
+                else:
+                    calibration_state.scale = scale
+                    calibration_state.unit = cdata.get("unit", "mm")
+                    calibration_state.user_calibrated = cdata.get(
+                        "user_calibrated", True
+                    )
             p1 = cdata.get("calib_p1")
-            calibration_state.calib_p1 = tuple(p1) if p1 else None
+            calibration_state.calib_p1 = (
+                tuple(p1) if p1 and not using_default_pixel_scale else None
+            )
             p2 = cdata.get("calib_p2")
-            calibration_state.calib_p2 = tuple(p2) if p2 else None
+            calibration_state.calib_p2 = (
+                tuple(p2) if p2 and not using_default_pixel_scale else None
+            )
             calibration_state.real_distance = cdata.get("real_distance", 1.0)
-            calibration_state.grid_visible = cdata.get("grid_visible", False)
+            calibration_state.grid_visible = (
+                True
+                if using_default_pixel_scale
+                else cdata.get("grid_visible", True)
+            )
             color = cdata.get("grid_color", [58, 90, 122])
             calibration_state.grid_color = tuple(color)
             calibration_state.grid_opacity = cdata.get("grid_opacity", 0.5)
-            calibration_state.grid_spacing_world = cdata.get("grid_spacing_world", 1.0)
+            calibration_state.grid_spacing_world = (
+                100.0
+                if using_default_pixel_scale
+                else cdata.get("grid_spacing_world", 100.0)
+            )
             calibration_state.grid_spacing_auto = cdata.get("grid_spacing_auto", True)
 
         if center_template_state is not None:

@@ -30,6 +30,7 @@ from models.annotations_model import (
 _COLOR_COL_W = 44
 _DOT_W = 16
 _COUNT_W = 52
+_AREA_W = 86
 _VISIBILITY_W = 40
 _DELETE_W = 40
 _NAME_MIN_W = 70
@@ -209,13 +210,15 @@ class AnnotationsSection(QWidget):
 
     annotation_selected = Signal(int)
 
-    def __init__(self, dataset_model, parent: QWidget = None) -> None:
+    def __init__(
+        self, dataset_model, calibration_model=None, parent: QWidget = None
+    ) -> None:
         super().__init__(parent)
         self.dataset_model = dataset_model
         self._current_row: int = -1
         self._selected_idx: int = -1
 
-        self._table_model = AnnotationTableModel(dataset_model, self)
+        self._table_model = AnnotationTableModel(dataset_model, calibration_model, self)
         self._proxy = AnnotationSortProxyModel(self)
         self._proxy.setSourceModel(self._table_model)
 
@@ -291,11 +294,13 @@ class AnnotationsSection(QWidget):
         header.setSectionResizeMode(AnnotationColumns.COLOR, QHeaderView.Fixed)
         header.setSectionResizeMode(AnnotationColumns.CLASS, QHeaderView.Stretch)
         header.setSectionResizeMode(AnnotationColumns.VERTICES, QHeaderView.Fixed)
+        header.setSectionResizeMode(AnnotationColumns.AREA, QHeaderView.Fixed)
         header.setSectionResizeMode(AnnotationColumns.VISIBILITY, QHeaderView.Fixed)
         header.setSectionResizeMode(AnnotationColumns.DELETE, QHeaderView.Fixed)
         self._table.setColumnWidth(AnnotationColumns.COLOR, _COLOR_COL_W)
         self._table.setColumnWidth(AnnotationColumns.CLASS, _NAME_MIN_W)
         self._table.setColumnWidth(AnnotationColumns.VERTICES, _COUNT_W)
+        self._table.setColumnWidth(AnnotationColumns.AREA, _AREA_W)
         self._table.setColumnWidth(AnnotationColumns.VISIBILITY, _VISIBILITY_W)
         self._table.setColumnWidth(AnnotationColumns.DELETE, _DELETE_W)
         self._table.sortByColumn(AnnotationColumns.CLASS, Qt.AscendingOrder)

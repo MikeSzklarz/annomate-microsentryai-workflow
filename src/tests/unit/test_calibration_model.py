@@ -18,6 +18,14 @@ def model():
 
 
 class TestApplyCalibration:
+    def test_defaults_to_pixel_scale(self, model):
+        assert model.has_scale()
+        assert not model.is_calibrated()
+        assert model.scale() == pytest.approx(1.0)
+        assert model.unit() == "px"
+        assert model.grid_visible() is True
+        assert model.grid_spacing_world() == pytest.approx(100.0)
+
     def test_sets_scale(self, model):
         model.set_calib_points((0.0, 0.0), (100.0, 0.0))
         ok = model.apply_calibration(5.0, "mm")
@@ -48,7 +56,9 @@ class TestApplyCalibration:
         model.apply_calibration(5.0, "mm")
         model.clear_calibration()
         assert not model.is_calibrated()
-        assert model.scale() is None
+        assert model.has_scale()
+        assert model.scale() == pytest.approx(1.0)
+        assert model.unit() == "px"
         assert model.calib_points() == (None, None)
 
 
@@ -88,10 +98,10 @@ class TestMeasurement:
         model.set_meas_p2((200.0, 0.0))
         assert model.measured_distance() == pytest.approx(10.0)
 
-    def test_no_measurement_when_uncalibrated(self, model):
+    def test_default_measurement_uses_pixels(self, model):
         model.set_meas_p1((0.0, 0.0))
         model.set_meas_p2((100.0, 0.0))
-        assert model.measured_distance() is None
+        assert model.measured_distance() == pytest.approx(100.0)
 
     def test_clear_measurement(self, model):
         model.set_meas_p1((0.0, 0.0))
@@ -117,6 +127,7 @@ class TestSerialization:
 
         assert model2.scale() == pytest.approx(model.scale())
         assert model2.unit() == "cm"
+        assert model2.is_calibrated()
         assert model2.calib_points() == ((10.0, 20.0), (110.0, 20.0))
         assert model2.grid_visible() is True
         assert model2.grid_color() == (255, 0, 128)
@@ -127,9 +138,25 @@ class TestSerialization:
     def test_empty_dict_defaults(self, model):
         model.from_dict({})
         assert not model.is_calibrated()
-        assert model.unit() == "mm"
-        assert model.grid_visible() is False
+        assert model.has_scale()
+        assert model.scale() == pytest.approx(1.0)
+        assert model.unit() == "px"
+        assert model.grid_visible() is True
         assert model.grid_opacity() == pytest.approx(0.5)
+
+    def test_legacy_calibrated_dict_defaults_user_calibrated(self, model):
+        model.from_dict({"scale": 0.25, "unit": "mm"})
+        assert model.is_calibrated()
+        assert model.scale() == pytest.approx(0.25)
+        assert model.unit() == "mm"
+
+    def test_legacy_uncalibrated_dict_resets_to_pixels(self, model):
+        model.from_dict({"scale": None, "unit": "mm", "grid_visible": False})
+        assert not model.is_calibrated()
+        assert model.has_scale()
+        assert model.scale() == pytest.approx(1.0)
+        assert model.unit() == "px"
+        assert model.grid_visible() is True
 
     def test_null_points_roundtrip(self, model):
         data = model.to_dict()

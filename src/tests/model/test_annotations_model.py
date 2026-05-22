@@ -1,5 +1,6 @@
 from PySide6.QtCore import Qt
 
+from core.states.calibration_state import CalibrationState
 from core.states.dataset_state import DatasetState
 from models.annotations_model import (
     ANNOTATION_INDEX_ROLE,
@@ -8,6 +9,7 @@ from models.annotations_model import (
     AnnotationSortProxyModel,
     AnnotationTableModel,
 )
+from models.calibration_model import CalibrationModel
 from models.dataset_model import DatasetTableModel
 
 
@@ -39,6 +41,8 @@ def test_annotation_rows_reflect_current_image_annotations():
     assert table_model.rowCount() == 3
     assert table_model.index(0, AnnotationColumns.CLASS).data() == "Beta"
     assert table_model.index(1, AnnotationColumns.VERTICES).data() == "4"
+    assert table_model.headerData(AnnotationColumns.AREA, Qt.Horizontal) == "Area (px)"
+    assert table_model.index(1, AnnotationColumns.AREA).data() == "4"
 
 
 def test_visibility_column_reflects_annotation_state():
@@ -82,6 +86,32 @@ def test_vertex_count_sorts_numerically():
     proxy.sort(AnnotationColumns.VERTICES, Qt.DescendingOrder)
 
     assert _proxy_indices(proxy) == [2, 1, 0]
+
+
+def test_area_sorts_numerically():
+    table_model = AnnotationTableModel(_make_model())
+    table_model.set_current_row(0)
+    proxy = AnnotationSortProxyModel()
+    proxy.setSourceModel(table_model)
+
+    proxy.sort(AnnotationColumns.AREA, Qt.DescendingOrder)
+
+    assert _proxy_indices(proxy) == [2, 1, 0]
+
+
+def test_area_recalculates_with_calibration():
+    calibration_model = CalibrationModel(CalibrationState())
+    table_model = AnnotationTableModel(_make_model(), calibration_model)
+    table_model.set_current_row(0)
+
+    assert table_model.headerData(AnnotationColumns.AREA, Qt.Horizontal) == "Area (px)"
+    assert table_model.index(1, AnnotationColumns.AREA).data() == "4"
+
+    calibration_model.set_calib_points((0.0, 0.0), (100.0, 0.0))
+    assert calibration_model.apply_calibration(5.0, "mm")
+
+    assert table_model.headerData(AnnotationColumns.AREA, Qt.Horizontal) == "Area (mm)"
+    assert table_model.index(1, AnnotationColumns.AREA).data() == "0.01"
 
 
 def test_class_column_updates_source_annotation():

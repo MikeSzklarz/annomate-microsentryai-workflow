@@ -200,7 +200,7 @@ class ViewportActionsBar(QFrame):
         panel_layout.setContentsMargins(10, 8, 10, 8)
         panel_layout.setSpacing(6)
 
-        self._status_lbl = QLabel("Not calibrated")
+        self._status_lbl = QLabel("No scale available")
         self._status_lbl.setWordWrap(True)
         self._status_lbl.setMinimumHeight(44)
         self._status_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -267,7 +267,7 @@ class ViewportActionsBar(QFrame):
         self._btn_clear_measurement.clicked.connect(self._on_clear_measurement_clicked)
         action_row.addWidget(self._btn_clear_measurement)
 
-        self._btn_reset_calibration = QPushButton("Reset Calibration")
+        self._btn_reset_calibration = QPushButton("Reset to Pixels")
         self._btn_reset_calibration.clicked.connect(self._on_reset_calibration_clicked)
         action_row.addWidget(self._btn_reset_calibration)
         panel_layout.addLayout(action_row)
@@ -584,8 +584,8 @@ class ViewportActionsBar(QFrame):
         self._refresh_action_availability()
 
     def _refresh_status(self) -> None:
-        if self._model is None or not self._model.is_calibrated():
-            self._status_lbl.setText("Not calibrated")
+        if self._model is None or not self._model.has_scale():
+            self._status_lbl.setText("No scale available")
             self._status_lbl.setStyleSheet("color: grey; font-style: italic;")
             return
         scale = self._model.scale()
@@ -602,7 +602,7 @@ class ViewportActionsBar(QFrame):
             self._refresh_action_availability()
             return
         self._refreshing = True
-        grid_visible = self._model.grid_visible() and self._model.is_calibrated()
+        grid_visible = self._model.grid_visible() and self._model.has_scale()
         self._grid_chk.setChecked(grid_visible)
         opacity_pct = int(self._model.grid_opacity() * 100)
         self._opacity_slider.setValue(opacity_pct)
@@ -712,7 +712,7 @@ class ViewportActionsBar(QFrame):
         self._refresh_template_status()
 
     def _refresh_action_availability(self) -> None:
-        calibrated = self._model is not None and self._model.is_calibrated()
+        scale_available = self._model is not None and self._model.has_scale()
         self._btn_calibrate.setEnabled(self._has_image)
         self._btn_crop.setEnabled(self._has_image)
         self._crop_chk.setEnabled(self._has_image)
@@ -730,16 +730,18 @@ class ViewportActionsBar(QFrame):
             self._center_template_model is not None
             and self._center_template_model.has_template()
         )
-        self._btn_measure.setEnabled(calibrated and self._has_image)
-        self._grid_chk.setEnabled(calibrated)
-        self._opacity_slider.setEnabled(calibrated)
-        self._color_btn.setEnabled(calibrated)
-        self._radio_auto.setEnabled(calibrated)
-        self._radio_fixed.setEnabled(calibrated)
-        self._spacing_edit.setEnabled(calibrated and self._radio_fixed.isChecked())
-        self._btn_clear_measurement.setEnabled(calibrated)
-        self._btn_reset_calibration.setEnabled(calibrated)
-        if not calibrated and self._active_tool == "measure":
+        self._btn_measure.setEnabled(scale_available and self._has_image)
+        self._grid_chk.setEnabled(scale_available)
+        self._opacity_slider.setEnabled(scale_available)
+        self._color_btn.setEnabled(scale_available)
+        self._radio_auto.setEnabled(scale_available)
+        self._radio_fixed.setEnabled(scale_available)
+        self._spacing_edit.setEnabled(
+            scale_available and self._radio_fixed.isChecked()
+        )
+        self._btn_clear_measurement.setEnabled(scale_available)
+        self._btn_reset_calibration.setEnabled(scale_available)
+        if not scale_available and self._active_tool == "measure":
             self.set_active_tool("")
             self.tool_selected.emit("")
 

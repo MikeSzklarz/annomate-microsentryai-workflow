@@ -108,7 +108,7 @@ class RightPanel(QWidget):
         cl.addWidget(classes_sec)
 
         annos_sec = _CollapsibleSection("Current Image Annotations")
-        self.annotations = AnnotationsSection(dataset_model)
+        self.annotations = AnnotationsSection(dataset_model, calibration_model)
         self.annotations.annotation_selected.connect(self.annotation_selected)
         annos_sec.body_layout().addWidget(self.annotations)
         cl.addWidget(annos_sec)

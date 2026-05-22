@@ -51,6 +51,10 @@ def test_annotations_section_uses_sortable_table_view(annotations_section):
         == "Points"
     )
     assert (
+        widget._table_model.headerData(AnnotationColumns.AREA, Qt.Horizontal)
+        == "Area (px)"
+    )
+    assert (
         widget._table.horizontalHeader().sortIndicatorSection()
         == AnnotationColumns.CLASS
     )

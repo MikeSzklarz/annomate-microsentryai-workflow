@@ -45,6 +45,7 @@ class CalibrationModel(QObject):
 
         self._state.scale = real_distance / pixel_dist
         self._state.unit = unit
+        self._state.user_calibrated = True
         self._state.real_distance = real_distance
         self._state.grid_visible = True
 
@@ -58,6 +59,8 @@ class CalibrationModel(QObject):
     def clear_calibration(self) -> None:
         self._state.clear_calibration()
         self.calibration_changed.emit()
+        self.grid_changed.emit()
+        self.measurement_updated.emit()
 
     # ------------------------------------------------------------------ #
     # Grid commands
@@ -111,6 +114,9 @@ class CalibrationModel(QObject):
     def is_calibrated(self) -> bool:
         return self._state.is_calibrated()
 
+    def has_scale(self) -> bool:
+        return self._state.has_scale()
+
     def scale(self) -> float | None:
         return self._state.scale
 
@@ -154,6 +160,7 @@ class CalibrationModel(QObject):
         return {
             "scale": s.scale,
             "unit": s.unit,
+            "user_calibrated": s.user_calibrated,
             "calib_p1": list(s.calib_p1) if s.calib_p1 else None,
             "calib_p2": list(s.calib_p2) if s.calib_p2 else None,
             "real_distance": s.real_distance,
@@ -166,18 +173,32 @@ class CalibrationModel(QObject):
 
     def from_dict(self, data: dict) -> None:
         s = self._state
-        s.scale = data.get("scale", None)
-        s.unit = data.get("unit", "mm")
+        if not data:
+            s.clear_calibration()
+            return
+
+        scale = data.get("scale", None)
+        using_default_pixel_scale = scale is None
+        if scale is None:
+            s.clear_calibration()
+        else:
+            s.scale = scale
+            s.unit = data.get("unit", "mm")
+            s.user_calibrated = data.get("user_calibrated", True)
         p1 = data.get("calib_p1")
-        s.calib_p1 = tuple(p1) if p1 else None
+        s.calib_p1 = tuple(p1) if p1 and not using_default_pixel_scale else None
         p2 = data.get("calib_p2")
-        s.calib_p2 = tuple(p2) if p2 else None
+        s.calib_p2 = tuple(p2) if p2 and not using_default_pixel_scale else None
         s.real_distance = data.get("real_distance", 1.0)
-        s.grid_visible = data.get("grid_visible", False)
+        s.grid_visible = True if using_default_pixel_scale else data.get("grid_visible", True)
         color = data.get("grid_color", [58, 90, 122])
         s.grid_color = tuple(color)
         s.grid_opacity = data.get("grid_opacity", 0.5)
-        s.grid_spacing_world = data.get("grid_spacing_world", 1.0)
+        s.grid_spacing_world = (
+            100.0
+            if using_default_pixel_scale
+            else data.get("grid_spacing_world", 100.0)
+        )
         s.grid_spacing_auto = data.get("grid_spacing_auto", True)
 
     # ------------------------------------------------------------------ #
@@ -188,10 +209,9 @@ class CalibrationModel(QObject):
     def _nice_spacing(scale: float) -> float:
         """Return a human-friendly grid spacing in world units.
 
-        Targets ~80 original-image pixels between lines. Same algorithm as
-        size_demo.py lines 520-533.
+        Targets ~100 original-image pixels between lines.
         """
-        target_px = 80
+        target_px = 100
         ideal_world = target_px * scale
         exponent = math.floor(math.log10(ideal_world))
         base = ideal_world / (10**exponent)

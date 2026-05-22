@@ -4,6 +4,7 @@ import numpy as np
 from pathlib import Path
 
 from core.persistence.project_io import ProjectIO
+from core.states.calibration_state import CalibrationState
 from core.states.dataset_state import DatasetState
 from core.states.center_template_state import CenterTemplateState
 from core.states.inference_state import InferenceState
@@ -363,6 +364,69 @@ class TestProjectRoundTrip:
         assert raw["version"] == ProjectIO.SCHEMA_VERSION
         assert "created_at" in raw
         assert "modified_at" in raw
+
+    def test_calibration_pixel_defaults_round_trip(self, pio, tmp_path):
+        ds = _make_dataset(tmp_path)
+        proj_dir = tmp_path / "proj"
+        state = CalibrationState()
+
+        path = pio.save_project(
+            str(proj_dir),
+            "myproject",
+            ds,
+            ValidationState(),
+            InferenceState(),
+            calibration_state=state,
+        )
+
+        data = pio.load_project(path)
+        restored = CalibrationState()
+        pio.apply_project_to_states(
+            data,
+            DatasetState(),
+            ValidationState(),
+            InferenceState(),
+            calibration_state=restored,
+        )
+
+        assert restored.scale == pytest.approx(1.0)
+        assert restored.unit == "px"
+        assert restored.user_calibrated is False
+        assert restored.grid_visible is True
+
+    def test_legacy_calibration_without_mode_loads_as_user_calibrated(self, pio):
+        restored = CalibrationState()
+
+        pio.apply_project_to_states(
+            {"calibration": {"scale": 0.05, "unit": "mm"}},
+            DatasetState(),
+            ValidationState(),
+            InferenceState(),
+            calibration_state=restored,
+        )
+
+        assert restored.scale == pytest.approx(0.05)
+        assert restored.unit == "mm"
+        assert restored.user_calibrated is True
+
+    def test_missing_calibration_loads_as_pixel_default(self, pio):
+        restored = CalibrationState()
+        restored.scale = 0.05
+        restored.unit = "mm"
+        restored.user_calibrated = True
+
+        pio.apply_project_to_states(
+            {},
+            DatasetState(),
+            ValidationState(),
+            InferenceState(),
+            calibration_state=restored,
+        )
+
+        assert restored.scale == pytest.approx(1.0)
+        assert restored.unit == "px"
+        assert restored.user_calibrated is False
+        assert restored.grid_visible is True
 
     def test_center_template_metadata_round_trips(self, pio, tmp_path):
         ds = _make_dataset(tmp_path)
