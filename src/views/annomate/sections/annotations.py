@@ -1,4 +1,4 @@
-from PySide6.QtCore import QItemSelectionModel, QRectF, Qt, Signal
+from PySide6.QtCore import QItemSelectionModel, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QStyle,
     QStyleOptionButton,
+    QStyleOptionComboBox,
     QStyleOptionViewItem,
     QStyledItemDelegate,
     QTableView,
@@ -56,6 +57,8 @@ class _AnnotationClassDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):
         editor = _NoWheelComboBox(parent)
         editor.addItems(self._table_model.class_names())
+        editor.activated.connect(lambda *_: self._commit_and_close(editor))
+        QTimer.singleShot(0, editor.showPopup)
         return editor
 
     def setEditorData(self, editor, index) -> None:
@@ -65,6 +68,30 @@ class _AnnotationClassDelegate(QStyledItemDelegate):
 
     def setModelData(self, editor, model, index) -> None:
         model.setData(index, editor.currentText(), Qt.EditRole)
+
+    def _commit_and_close(self, editor) -> None:
+        editor.hidePopup()
+        self.commitData.emit(editor)
+        self.closeEditor.emit(editor)
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        style = opt.widget.style() if opt.widget is not None else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter)
+
+        combo = QStyleOptionComboBox()
+        if option.widget is not None:
+            combo.initFrom(option.widget)
+        combo.rect = option.rect.adjusted(3, 3, -3, -3)
+        combo.currentText = str(index.data(Qt.DisplayRole) or "")
+        combo.state = QStyle.State_Enabled
+        if option.state & QStyle.State_MouseOver:
+            combo.state |= QStyle.State_MouseOver
+        if option.state & QStyle.State_Selected:
+            combo.state |= QStyle.State_Selected
+        style.drawComplexControl(QStyle.CC_ComboBox, combo, painter)
+        style.drawControl(QStyle.CE_ComboBoxLabel, combo, painter)
 
 
 class _ColorDotDelegate(QStyledItemDelegate):
