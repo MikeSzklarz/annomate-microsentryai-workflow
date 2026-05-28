@@ -222,11 +222,18 @@ class ViewportActionsBar(QFrame):
         ratio_row.addWidget(self._btn_apply_ratio)
         layout.addLayout(ratio_row)
 
-        # Import + click-calibrate buttons
-        self._btn_import_ratio = QPushButton("↑  Import calibration.txt")
+        # Import / Export calibration file buttons
+        ratio_file_row = QHBoxLayout()
+        ratio_file_row.setSpacing(4)
+        self._btn_import_ratio = QPushButton("Import")
         self._btn_import_ratio.setToolTip("Load a ratio from a plain-text .txt file")
         self._btn_import_ratio.clicked.connect(self._on_import_ratio_clicked)
-        layout.addWidget(self._btn_import_ratio)
+        ratio_file_row.addWidget(self._btn_import_ratio)
+        self._btn_export_ratio = QPushButton("Export")
+        self._btn_export_ratio.setToolTip("Save the current ratio to a plain-text .txt file")
+        self._btn_export_ratio.clicked.connect(self._on_export_ratio_clicked)
+        ratio_file_row.addWidget(self._btn_export_ratio)
+        layout.addLayout(ratio_file_row)
 
         self._btn_calibrate_points = QPushButton("✛  Click two points…")
         self._btn_calibrate_points.setCheckable(True)
@@ -533,6 +540,25 @@ class ViewportActionsBar(QFrame):
         except Exception as exc:
             QMessageBox.critical(self, "Import Error", str(exc))
 
+    def _on_export_ratio_clicked(self) -> None:
+        if self._model is None or not self._model.has_scale():
+            QMessageBox.warning(self, "Export Calibration Ratio", "No calibration set.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Calibration Ratio",
+            "calibration.txt",
+            "Calibration Ratio (*.txt)",
+        )
+        if not path:
+            return
+        from core.persistence.calibration_io import write_calibration_ratio
+        try:
+            write_calibration_ratio(path, self._model.scale(), self._model.unit())
+            QMessageBox.information(self, "Export Calibration Ratio", f"Saved to:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+
     def _on_grid_toggled(self, checked: bool) -> None:
         if self._model is not None and not self._refreshing:
             self._model.set_grid_visible(checked)
@@ -829,6 +855,7 @@ class ViewportActionsBar(QFrame):
         scale_available = self._model is not None and self._model.has_scale()
         self._btn_calibrate_points.setEnabled(self._has_image)
         self._btn_import_ratio.setEnabled(True)
+        self._btn_export_ratio.setEnabled(scale_available)
         self._btn_apply_ratio.setEnabled(True)
         self._btn_crop.setEnabled(self._has_image)
         self._crop_chk.setEnabled(self._has_image)
