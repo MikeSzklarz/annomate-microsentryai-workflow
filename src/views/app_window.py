@@ -143,6 +143,12 @@ class AppWindow(QMainWindow):
             "",
             self._import_annotation_classes,
         )
+        add(
+            data_menu,
+            "Import Calibration Ratio…",
+            "",
+            self._import_calibration_ratio,
+        )
         data_menu.addSeparator()
         add(
             data_menu,
@@ -153,6 +159,12 @@ class AppWindow(QMainWindow):
         add(data_menu, "Export Polygons + Data…", "", self._export_polygons)
         add(data_menu, "Export Binary Masks…", "", self._export_binary_masks)
         add(data_menu, "Export CSV…", "", self._export_csv)
+        add(
+            data_menu,
+            "Export Calibration Ratio…",
+            "",
+            self._export_calibration_ratio,
+        )
 
         validation_menu = self.menuBar().addMenu("&Validation")
         add(validation_menu, "Open Validation…", "", self._open_validation)
@@ -450,6 +462,48 @@ class AppWindow(QMainWindow):
             QMessageBox.information(self, "Export", msg)
         except Exception as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
+
+    def _export_calibration_ratio(self) -> None:
+        m = self.calibration_model
+        if m is None or not m.has_scale():
+            QMessageBox.warning(self, "Export Calibration Ratio", "No calibration set.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Calibration Ratio",
+            os.path.join(os.getcwd(), "calibration.annocalib"),
+            "Calibration Ratio (*.annocalib)",
+        )
+        if not path:
+            return
+        try:
+            from core.persistence.calibration_io import write_calibration_ratio
+            write_calibration_ratio(
+                path, m.scale(), m.unit(), m.grid_spacing_world(), m.grid_spacing_auto()
+            )
+            QMessageBox.information(self, "Export Calibration Ratio", f"Saved to:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+
+    def _import_calibration_ratio(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Calibration Ratio",
+            os.getcwd(),
+            "Calibration Ratio (*.annocalib)",
+        )
+        if not path:
+            return
+        try:
+            from core.persistence.calibration_io import read_calibration_ratio
+            data = read_calibration_ratio(path)
+            m = self.calibration_model
+            m.apply_scale_direct(data["scale_world_per_px"], data["unit"])
+            if not data["grid_spacing_auto"]:
+                m.set_grid_spacing(data["grid_spacing_world"])
+            QMessageBox.information(self, "Import Calibration Ratio", f"Loaded from:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Import Error", str(exc))
 
     # ================================================================== #
     # Title, close, unsaved-changes guard

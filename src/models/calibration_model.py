@@ -56,6 +56,17 @@ class CalibrationModel(QObject):
         self.grid_changed.emit()
         return True
 
+    def apply_scale_direct(self, scale: float, unit: str) -> None:
+        """Set scale from a known ratio without requiring calibration points."""
+        self._state.scale = scale
+        self._state.unit = unit
+        self._state.user_calibrated = True
+        self._state.grid_visible = True
+        if self._state.grid_spacing_auto:
+            self._state.grid_spacing_world = self._nice_spacing(scale)
+        self.calibration_changed.emit()
+        self.grid_changed.emit()
+
     def clear_calibration(self) -> None:
         self._state.clear_calibration()
         self.calibration_changed.emit()
