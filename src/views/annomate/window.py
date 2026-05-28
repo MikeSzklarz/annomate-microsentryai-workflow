@@ -521,6 +521,11 @@ class AnnoMateWindow(QWidget):
             self.inference_controller.progress.connect(self._on_inference_progress)
             self.inference_controller.batch_done.connect(self._on_inference_batch_done)
 
+        if self._center_template_controller is not None:
+            self._center_template_controller.preload_result.connect(
+                self._on_center_crop_preload_result
+            )
+
     # ------------------------------------------------------------------ #
     # UI construction
     # ------------------------------------------------------------------ #
@@ -648,6 +653,7 @@ class AnnoMateWindow(QWidget):
     def _on_model_reset(self) -> None:
         if self.dataset_model.rowCount() > 0:
             self._load_row(0)
+            self._start_pending_center_crop_preload()
         else:
             self._current_row = -1
             self._current_bgr = None
@@ -868,6 +874,7 @@ class AnnoMateWindow(QWidget):
 
         self.canvas.set_center_crop(calibrating=False)
         self.viewport_actions.set_center_calibrating(False)
+        self._start_pending_center_crop_preload()
 
     def _on_center_template_cleared(self) -> None:
         if self._center_template_controller is None:
@@ -875,7 +882,7 @@ class AnnoMateWindow(QWidget):
             return
         logger.info("Center template cleared by user.")
         self._center_template_controller.clear_template()
-        self.canvas.set_center_crop(calibrating=False)
+        self.canvas.set_center_crop(enabled=False, calibrating=False)
         self.viewport_actions.set_center_calibrating(False)
 
     def _apply_center_template_match(self, bgr) -> None:
@@ -886,9 +893,11 @@ class AnnoMateWindow(QWidget):
             logger.debug("Skipping center template match: feature not wired.")
             return
         logger.debug("Applying center template match for row %d.", self._current_row)
-        result = self._center_template_controller.match_image(bgr)
+        image_path = self.dataset_model.get_image_path(self._current_row)
+        result = self._center_template_controller.match_image(bgr, image_path)
         if result is None:
             logger.debug("Center template match produced no result for row %d.", self._current_row)
+            self.canvas.set_center_crop(enabled=False)
             return
         center_x, center_y, _score = result
         crop = self._center_template_model.crop_settings()
@@ -1126,6 +1135,22 @@ class AnnoMateWindow(QWidget):
         if paths:
             self.inference_controller.start_batch_inference(paths)
 
+    def _start_pending_center_crop_preload(self) -> None:
+        if self._center_template_controller is None:
+            return
+        total = self.dataset_model.rowCount()
+        if total == 0:
+            return
+        # Start from the image after the current one so nearby images are cached first.
+        start = (self._current_row + 1) % total if self._current_row >= 0 else 0
+        paths = []
+        for offset in range(total):
+            path = self.dataset_model.get_image_path((start + offset) % total)
+            if not self._center_template_controller.is_cached(path):
+                paths.append(path)
+        if paths:
+            self._center_template_controller.start_batch_preload(paths)
+
     def _refresh_canvas_render(self) -> None:
         """Update heatmap layer and polygon overlays without resetting zoom or pan.
 
@@ -1192,6 +1217,25 @@ class AnnoMateWindow(QWidget):
     # ------------------------------------------------------------------ #
     # Inference signal slots
     # ------------------------------------------------------------------ #
+
+    def _on_center_crop_preload_result(self, path: str, cx: float, cy: float, score: float) -> None:
+        if self._current_row < 0 or self._center_template_model is None:
+            return
+        if path != self.dataset_model.get_image_path(self._current_row):
+            return
+        crop = self._center_template_model.crop_settings()
+        current_dot = self.canvas.center_crop_settings().get("center_dot", True)
+        self.canvas.set_center_crop(
+            enabled=True,
+            shape=crop.get("shape") or "circle",
+            width=crop.get("width") or 1210,
+            height=crop.get("height") or 1210,
+            center_dot=current_dot,
+            center_x=cx,
+            center_y=cy,
+            calibrating=False,
+        )
+        self.viewport_actions.set_center_calibrating(False)
 
     def _on_inference_result(self, path: str, score: float, score_map) -> None:
         self.inference_model.set_score_map(path, score, score_map)
