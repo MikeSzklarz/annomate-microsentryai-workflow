@@ -1,13 +1,16 @@
+import re
+
 from PySide6.QtWidgets import (
     QDialog,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QComboBox,
     QDialogButtonBox,
     QMessageBox,
 )
+
+_VALUE_UNIT_RE = re.compile(r"^\s*([\d.]+)\s*([a-zA-Z]+)\s*$")
 
 
 class CalibrationDialog(QDialog):
@@ -17,8 +20,6 @@ class CalibrationDialog(QDialog):
     can be shown as a read-only reference.  On accept, call get_result() to
     retrieve (real_distance, unit).
     """
-
-    _UNITS = ["mm", "um", "nm", "cm", "m", "in", "ft"]
 
     def __init__(self, pixel_dist: float, parent=None) -> None:
         super().__init__(parent)
@@ -35,14 +36,9 @@ class CalibrationDialog(QDialog):
         layout.addWidget(QLabel("Enter the real-world distance this represents:"))
 
         row = QHBoxLayout()
-        self._edit = QLineEdit("1.0")
-        self._edit.setPlaceholderText("e.g. 5.0")
+        self._edit = QLineEdit()
+        self._edit.setPlaceholderText("e.g. 5mm, 100um, 0.5in")
         row.addWidget(self._edit)
-
-        self._combo = QComboBox()
-        self._combo.addItems(self._UNITS)
-        self._combo.setCurrentText("mm")
-        row.addWidget(self._combo)
         layout.addLayout(row)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -51,15 +47,15 @@ class CalibrationDialog(QDialog):
         layout.addWidget(buttons)
 
     def _on_accept(self) -> None:
-        try:
-            val = float(self._edit.text())
-            if val <= 0:
-                raise ValueError
-        except ValueError:
-            QMessageBox.warning(self, "Invalid Input", "Enter a positive number.")
+        m = _VALUE_UNIT_RE.match(self._edit.text())
+        if not m or float(m.group(1)) <= 0:
+            QMessageBox.warning(
+                self, "Invalid Input", "Enter a positive value with a unit, e.g. 5mm or 100um."
+            )
             return
         self.accept()
 
     def get_result(self) -> tuple:
         """Return (real_distance: float, unit: str)."""
-        return float(self._edit.text()), self._combo.currentText()
+        m = _VALUE_UNIT_RE.match(self._edit.text())
+        return float(m.group(1)), m.group(2)

@@ -6,11 +6,13 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPushButton,
     QRadioButton,
     QSlider,
@@ -128,14 +130,6 @@ class ViewportActionsBar(QFrame):
 
         self._add_divider(layout)
 
-        self._btn_calibrate = self._make_button("⊕", "Set Calibration Points (C)")
-        self._btn_calibrate.setCheckable(True)
-        self._btn_calibrate.setFont(font)
-        self._btn_calibrate.clicked.connect(
-            lambda checked: self._on_tool_clicked("calibrate", checked)
-        )
-        layout.addWidget(self._btn_calibrate)
-
         self._btn_measure = self._make_button("⇔", "Measure Distance (M)")
         self._btn_measure.setCheckable(True)
         self._btn_measure.setFont(font)
@@ -195,82 +189,140 @@ class ViewportActionsBar(QFrame):
         menu = QMenu(self)
         action = QWidgetAction(self)
         panel = QWidget()
-        panel.setMinimumWidth(260)
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(10, 8, 10, 8)
-        panel_layout.setSpacing(6)
+        panel.setMinimumWidth(300)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(10, 8, 10, 10)
+        layout.setSpacing(6)
 
-        self._status_lbl = QLabel("No scale available")
-        self._status_lbl.setWordWrap(True)
-        self._status_lbl.setMinimumHeight(44)
-        self._status_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self._status_lbl.setStyleSheet("color: grey; font-style: italic;")
-        panel_layout.addWidget(self._status_lbl)
+        # ═══════════════════════════════════════════════════════════════
+        # CALIBRATION SECTION
+        # ═══════════════════════════════════════════════════════════════
+        calib_header = QLabel("Calibration")
+        calib_header.setStyleSheet("font-weight: bold;")
+        layout.addWidget(calib_header)
 
-        grid_row = QHBoxLayout()
-        grid_row.setSpacing(6)
+        self._calib_status_lbl = QLabel("Current Calibration: None")
+        layout.addWidget(self._calib_status_lbl)
+
+        # Ratio input: [ 1px ] : [ 0.05mm ] [ Apply ]
+        ratio_row = QHBoxLayout()
+        ratio_row.setSpacing(4)
+        self._ratio_px_edit = QLineEdit()
+        self._ratio_px_edit.setPlaceholderText("1px")
+        self._ratio_px_edit.setToolTip("Left side of ratio, e.g. 1px or 50px")
+        ratio_row.addWidget(self._ratio_px_edit)
+        ratio_row.addWidget(QLabel(":"))
+        self._ratio_val_edit = QLineEdit()
+        self._ratio_val_edit.setPlaceholderText("0.05mm")
+        self._ratio_val_edit.setToolTip("Right side of ratio, e.g. 0.05mm, 100um, 1furlong")
+        ratio_row.addWidget(self._ratio_val_edit)
+        self._btn_apply_ratio = QPushButton("Apply")
+        self._btn_apply_ratio.setFixedWidth(50)
+        self._btn_apply_ratio.clicked.connect(self._on_apply_ratio_clicked)
+        ratio_row.addWidget(self._btn_apply_ratio)
+        layout.addLayout(ratio_row)
+
+        # Import + click-calibrate buttons
+        self._btn_import_ratio = QPushButton("↑  Import calibration.txt")
+        self._btn_import_ratio.setToolTip("Load a ratio from a plain-text .txt file")
+        self._btn_import_ratio.clicked.connect(self._on_import_ratio_clicked)
+        layout.addWidget(self._btn_import_ratio)
+
+        self._btn_calibrate_points = QPushButton("✛  Click two points…")
+        self._btn_calibrate_points.setCheckable(True)
+        self._btn_calibrate_points.setToolTip(
+            "Click two known points on the image, then enter the real distance"
+        )
+        self._btn_calibrate_points.clicked.connect(
+            lambda checked: self._on_tool_clicked("calibrate", checked)
+        )
+        layout.addWidget(self._btn_calibrate_points)
+
+        # Measurement result
+        meas_row = QHBoxLayout()
+        meas_row.setSpacing(4)
+        self._meas_lbl = QLabel("Distance: -")
+        self._meas_lbl.setStyleSheet("font-weight: bold;")
+        meas_row.addWidget(self._meas_lbl)
+        meas_row.addStretch()
+        self._btn_clear_measurement = QPushButton("✕")
+        self._btn_clear_measurement.setFixedSize(24, 24)
+        self._btn_clear_measurement.setToolTip("Clear measurement")
+        self._btn_clear_measurement.clicked.connect(self._on_clear_measurement_clicked)
+        meas_row.addWidget(self._btn_clear_measurement)
+        layout.addLayout(meas_row)
+
+        self._btn_reset_calibration = QPushButton("Reset to pixels")
+        self._btn_reset_calibration.setToolTip("Remove calibration and return to pixel units")
+        self._btn_reset_calibration.clicked.connect(self._on_reset_calibration_clicked)
+        layout.addWidget(self._btn_reset_calibration)
+
+        # ── Section divider ───────────────────────────────────────────
+        div = QFrame()
+        div.setFrameShape(QFrame.HLine)
+        div.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(div)
+
+        # ═══════════════════════════════════════════════════════════════
+        # GRID SECTION
+        # ═══════════════════════════════════════════════════════════════
+        grid_header = QLabel("Grid")
+        grid_header.setStyleSheet("font-weight: bold;")
+        layout.addWidget(grid_header)
+
         self._grid_chk = QCheckBox("Show Grid")
         self._grid_chk.toggled.connect(self._on_grid_toggled)
-        grid_row.addWidget(self._grid_chk)
-        grid_row.addStretch()
-        grid_row.addWidget(QLabel("Opacity"))
+        layout.addWidget(self._grid_chk)
+
+        opacity_row = QHBoxLayout()
+        opacity_row.setSpacing(6)
+        opacity_row.addWidget(QLabel("Opacity"))
         self._opacity_slider = QSlider(Qt.Horizontal)
         self._opacity_slider.setRange(0, 100)
         self._opacity_slider.setValue(50)
-        self._opacity_slider.setFixedWidth(84)
         self._opacity_slider.valueChanged.connect(self._on_opacity_changed)
-        grid_row.addWidget(self._opacity_slider)
+        opacity_row.addWidget(self._opacity_slider)
         self._opacity_lbl = QLabel("50%")
         self._opacity_lbl.setFixedWidth(34)
-        grid_row.addWidget(self._opacity_lbl)
-        panel_layout.addLayout(grid_row)
+        opacity_row.addWidget(self._opacity_lbl)
+        layout.addLayout(opacity_row)
 
-        spacing_row = QHBoxLayout()
-        spacing_row.setSpacing(6)
-        spacing_row.addWidget(QLabel("Spacing"))
+        spacing_mode_row = QHBoxLayout()
+        spacing_mode_row.setSpacing(6)
+        spacing_mode_row.addWidget(QLabel("Spacing"))
+        spacing_mode_row.addStretch()
         self._radio_auto = QRadioButton("Auto")
-        self._radio_fixed = QRadioButton("Fixed:")
+        self._radio_fixed = QRadioButton("Fixed")
         self._radio_auto.setChecked(True)
         spacing_group = QButtonGroup(self)
         spacing_group.addButton(self._radio_auto)
         spacing_group.addButton(self._radio_fixed)
         self._radio_auto.toggled.connect(self._on_spacing_mode_changed)
-        spacing_row.addWidget(self._radio_auto)
-        spacing_row.addWidget(self._radio_fixed)
+        spacing_mode_row.addWidget(self._radio_auto)
+        spacing_mode_row.addWidget(self._radio_fixed)
+        layout.addLayout(spacing_mode_row)
+
+        spacing_val_row = QHBoxLayout()
+        spacing_val_row.setSpacing(6)
         self._spacing_edit = QLineEdit()
         self._spacing_edit.setPlaceholderText("1.0")
-        self._spacing_edit.setFixedWidth(64)
         self._spacing_edit.setEnabled(False)
         self._spacing_edit.editingFinished.connect(self._on_spacing_edited)
-        spacing_row.addWidget(self._spacing_edit)
-        self._unit_lbl = QLabel("mm")
-        spacing_row.addWidget(self._unit_lbl)
-        panel_layout.addLayout(spacing_row)
+        spacing_val_row.addWidget(self._spacing_edit)
+        self._unit_lbl = QLabel("px")
+        spacing_val_row.addWidget(self._unit_lbl)
+        layout.addLayout(spacing_val_row)
 
-        details_row = QHBoxLayout()
-        details_row.setSpacing(6)
-        details_row.addWidget(QLabel("Color"))
+        color_row = QHBoxLayout()
+        color_row.setSpacing(6)
+        color_row.addWidget(QLabel("Color"))
         self._color_btn = QPushButton()
         self._color_btn.setFixedSize(32, 20)
         self._color_btn.setToolTip("Change grid color")
         self._color_btn.clicked.connect(self._on_color_clicked)
-        details_row.addWidget(self._color_btn)
-        details_row.addStretch()
-        self._meas_lbl = QLabel("Distance: -")
-        self._meas_lbl.setStyleSheet("font-weight: bold;")
-        details_row.addWidget(self._meas_lbl)
-        panel_layout.addLayout(details_row)
-
-        action_row = QHBoxLayout()
-        action_row.setSpacing(6)
-        self._btn_clear_measurement = QPushButton("Clear Measurement")
-        self._btn_clear_measurement.clicked.connect(self._on_clear_measurement_clicked)
-        action_row.addWidget(self._btn_clear_measurement)
-
-        self._btn_reset_calibration = QPushButton("Reset to Pixels")
-        self._btn_reset_calibration.clicked.connect(self._on_reset_calibration_clicked)
-        action_row.addWidget(self._btn_reset_calibration)
-        panel_layout.addLayout(action_row)
+        color_row.addWidget(self._color_btn)
+        color_row.addStretch()
+        layout.addLayout(color_row)
 
         self._update_color_swatch((58, 90, 122))
         action.setDefaultWidget(panel)
@@ -399,12 +451,12 @@ class ViewportActionsBar(QFrame):
     def set_active_tool(self, tool_name: str) -> None:
         self._active_tool = tool_name if tool_name in ("calibrate", "measure") else ""
         self._refreshing = True
-        self._btn_calibrate.setChecked(self._active_tool == "calibrate")
+        self._btn_calibrate_points.setChecked(self._active_tool == "calibrate")
         self._btn_measure.setChecked(self._active_tool == "measure")
         self._refreshing = False
 
     def toggle_calibrate(self) -> None:
-        if self._btn_calibrate.isEnabled():
+        if self._btn_calibrate_points.isEnabled():
             self._on_tool_clicked("calibrate", self._active_tool != "calibrate")
 
     def toggle_measure(self) -> None:
@@ -423,6 +475,36 @@ class ViewportActionsBar(QFrame):
         self._active_tool = tool_name if checked else ""
         self.set_active_tool(self._active_tool)
         self.tool_selected.emit(self._active_tool)
+
+    def _on_apply_ratio_clicked(self) -> None:
+        if self._model is None:
+            return
+        px_text = self._ratio_px_edit.text().strip()
+        val_text = self._ratio_val_edit.text().strip()
+        if not px_text or not val_text:
+            return
+        from core.persistence.calibration_io import parse_ratio_string
+        try:
+            scale, unit = parse_ratio_string(f"{px_text}:{val_text}")
+            self._model.apply_scale_direct(scale, unit)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Ratio", str(exc))
+
+    def _on_import_ratio_clicked(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Calibration Ratio",
+            "",
+            "Calibration Ratio (*.txt)",
+        )
+        if not path:
+            return
+        from core.persistence.calibration_io import read_calibration_ratio
+        try:
+            data = read_calibration_ratio(path)
+            self._model.apply_scale_direct(data["scale_world_per_px"], data["unit"])
+        except Exception as exc:
+            QMessageBox.critical(self, "Import Error", str(exc))
 
     def _on_grid_toggled(self, checked: bool) -> None:
         if self._model is not None and not self._refreshing:
@@ -577,25 +659,30 @@ class ViewportActionsBar(QFrame):
             self._model.set_grid_spacing(value)
 
     def _refresh_all(self) -> None:
-        self._refresh_status()
+        self._refresh_calib_status()
         self._refresh_controls()
         self._refresh_measurement()
         self._refresh_crop_controls()
         self._refresh_action_availability()
 
-    def _refresh_status(self) -> None:
+    def _refresh_calib_status(self) -> None:
         if self._model is None or not self._model.has_scale():
-            self._status_lbl.setText("No scale available")
-            self._status_lbl.setStyleSheet("color: grey; font-style: italic;")
+            self._calib_status_lbl.setText("Current Calibration: None")
+            if not self._ratio_px_edit.hasFocus():
+                self._ratio_px_edit.clear()
+            if not self._ratio_val_edit.hasFocus():
+                self._ratio_val_edit.clear()
             return
+        from core.persistence.calibration_io import format_ratio_string
         scale = self._model.scale()
         unit = self._model.unit()
-        step = self._model.grid_spacing_world()
-        mode = "Auto" if self._model.grid_spacing_auto() else "Fixed"
-        self._status_lbl.setText(
-            f"Scale: {scale:.4g} {unit}/px\nGrid: {step:g} {unit} ({mode})"
-        )
-        self._status_lbl.setStyleSheet("color: black; font-style: normal;")
+        ratio_str = format_ratio_string(scale, unit)
+        self._calib_status_lbl.setText(f"Current Calibration: {ratio_str}")
+        left, right = ratio_str.split(":", 1)
+        if not self._ratio_px_edit.hasFocus():
+            self._ratio_px_edit.setText(left)
+        if not self._ratio_val_edit.hasFocus():
+            self._ratio_val_edit.setText(right)
 
     def _refresh_controls(self) -> None:
         if self._model is None:
@@ -713,7 +800,9 @@ class ViewportActionsBar(QFrame):
 
     def _refresh_action_availability(self) -> None:
         scale_available = self._model is not None and self._model.has_scale()
-        self._btn_calibrate.setEnabled(self._has_image)
+        self._btn_calibrate_points.setEnabled(self._has_image)
+        self._btn_import_ratio.setEnabled(True)
+        self._btn_apply_ratio.setEnabled(True)
         self._btn_crop.setEnabled(self._has_image)
         self._crop_chk.setEnabled(self._has_image)
         self._crop_shape_combo.setEnabled(self._has_image)

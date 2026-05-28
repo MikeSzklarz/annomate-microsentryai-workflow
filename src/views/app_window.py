@@ -296,16 +296,16 @@ class AppWindow(QMainWindow):
         self._check_orphans_then_save(self.project_controller.save_project)
 
     def _save_project_as(self) -> None:
-        parent_dir = QFileDialog.getExistingDirectory(
+        project_dir = QFileDialog.getExistingDirectory(
             self, "Choose Project Folder", os.getcwd()
         )
-        if not parent_dir:
+        if not project_dir:
             return
 
         image_dir = self.dataset_model.get_image_dir()
         from pathlib import Path
 
-        default_name = Path(image_dir).name if image_dir else "project"
+        default_name = Path(image_dir).name if image_dir else Path(project_dir).name
 
         name, ok = QInputDialog.getText(
             self, "Project Name", "Enter project name:", text=default_name
@@ -313,10 +313,8 @@ class AppWindow(QMainWindow):
         if not ok or not name.strip():
             return
 
-        name = name.strip()
-        project_dir = os.path.join(parent_dir, name)
         self._check_orphans_then_save(
-            lambda: self.project_controller.save_project_as(project_dir, name)
+            lambda: self.project_controller.save_project_as(project_dir, name.strip())
         )
 
     def _check_orphans_then_save(self, save_fn) -> None:
@@ -475,16 +473,14 @@ class AppWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Export Calibration Ratio",
-            os.path.join(self._export_start_dir(), "calibration.annocalib"),
-            "Calibration Ratio (*.annocalib)",
+            os.path.join(self._export_start_dir(), "calibration.txt"),
+            "Calibration Ratio (*.txt)",
         )
         if not path:
             return
         try:
             from core.persistence.calibration_io import write_calibration_ratio
-            write_calibration_ratio(
-                path, m.scale(), m.unit(), m.grid_spacing_world(), m.grid_spacing_auto()
-            )
+            write_calibration_ratio(path, m.scale(), m.unit())
             QMessageBox.information(self, "Export Calibration Ratio", f"Saved to:\n{path}")
         except Exception as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
@@ -494,17 +490,14 @@ class AppWindow(QMainWindow):
             self,
             "Import Calibration Ratio",
             self._export_start_dir(),
-            "Calibration Ratio (*.annocalib)",
+            "Calibration Ratio (*.txt)",
         )
         if not path:
             return
         try:
             from core.persistence.calibration_io import read_calibration_ratio
             data = read_calibration_ratio(path)
-            m = self.calibration_model
-            m.apply_scale_direct(data["scale_world_per_px"], data["unit"])
-            if not data["grid_spacing_auto"]:
-                m.set_grid_spacing(data["grid_spacing_world"])
+            self.calibration_model.apply_scale_direct(data["scale_world_per_px"], data["unit"])
             QMessageBox.information(self, "Import Calibration Ratio", f"Loaded from:\n{path}")
         except Exception as exc:
             QMessageBox.critical(self, "Import Error", str(exc))
