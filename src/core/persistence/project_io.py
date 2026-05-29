@@ -145,6 +145,8 @@ class ProjectIO:
             proj["calibration"] = {
                 "scale": cs.scale,
                 "unit": cs.unit,
+                "px_count": cs.px_count,
+                "world_val": cs.world_val,
                 "user_calibrated": cs.user_calibrated,
                 "calib_p1": list(cs.calib_p1) if cs.calib_p1 else None,
                 "calib_p2": list(cs.calib_p2) if cs.calib_p2 else None,
@@ -347,6 +349,8 @@ class ProjectIO:
                 else:
                     calibration_state.scale = scale
                     calibration_state.unit = cdata.get("unit", "mm")
+                    calibration_state.px_count = cdata.get("px_count", 1.0)
+                    calibration_state.world_val = cdata.get("world_val", scale)
                     calibration_state.user_calibrated = cdata.get(
                         "user_calibrated", True
                     )
