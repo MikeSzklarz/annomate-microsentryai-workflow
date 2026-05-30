@@ -65,9 +65,9 @@ class DatasetState:
                 assignment, or note; ``False`` otherwise.
         """
         has_anno = bool(self.annotations.get(img_name))
-        has_meta = bool(self.inspectors.get(img_name) or self.notes.get(img_name))
+        has_note = bool(self.notes.get(img_name))
         has_decision = img_name in self.review_decisions
-        return has_anno or has_meta or has_decision
+        return has_anno or has_note or has_decision
 
     # --- Annotation CRUD ---
 

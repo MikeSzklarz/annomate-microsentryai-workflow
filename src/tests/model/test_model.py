@@ -49,10 +49,10 @@ class TestStatusColumn:
         model.delete_annotation(0, 0)
         assert model.data(model.index(0, 1)) == "Pending"
 
-    def test_inspector_marks_reviewed(self, model):
+    def test_inspector_alone_does_not_mark_reviewed(self, model):
         model.load_folder("/fake", ["img.jpg"])
         model.set_inspector(0, "Alice")
-        assert model.data(model.index(0, 1)) == "Reviewed"
+        assert model.data(model.index(0, 1)) == "Pending"
 
 
 class TestQueryAPI:

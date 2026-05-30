@@ -115,7 +115,7 @@ class IOController:
                     "tray": tray_name,
                     "image_name": name,
                     "decision": state.review_decisions.get(name, "") if reviewed else "",
-                    "inspector": state.inspectors.get(name, "") if reviewed else "",
+                    "inspector": state.inspectors.get(name, ""),
                     "note": state.notes.get(name, "") if reviewed else "",
                     "classes": (",".join(unique_classes) if unique_classes else "good")
                     if reviewed

@@ -97,9 +97,9 @@ class TestIsReviewed:
         state.add_annotation("img.jpg", "Defect", [(0, 0)])
         assert state.is_reviewed("img.jpg")
 
-    def test_reviewed_when_inspector_set(self, state):
+    def test_not_reviewed_when_only_inspector_set(self, state):
         state.set_inspector("img.jpg", "Alice")
-        assert state.is_reviewed("img.jpg")
+        assert not state.is_reviewed("img.jpg")
 
     def test_reviewed_when_note_set(self, state):
         state.set_note("img.jpg", "Looks bad")
