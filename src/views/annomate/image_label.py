@@ -1246,7 +1246,7 @@ class ImageLabel(QLabel):
                 f2.setBold(True)
                 painter.setFont(f2)
                 painter.setPen(QPen(meas_color))
-                painter.drawText(QPointF(mx, my), f"{dist:.3f} {m.unit()}")
+                painter.drawText(QPointF(mx, my), f"{dist:.1f} {m.unit()}")
         elif len(meas_pts) == 1 and self.current_tool == MEASURE and self._mouse_pos:
             p1d = QPointF(
                 meas_pts[0][0] * self._base_scale, meas_pts[0][1] * self._base_scale

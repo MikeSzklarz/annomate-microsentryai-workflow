@@ -770,7 +770,7 @@ class ViewportActionsBar(QFrame):
             else:
                 self._meas_lbl.setText("Distance: -")
             return
-        self._meas_lbl.setText(f"Distance: {dist:.4g} {self._model.unit()}")
+        self._meas_lbl.setText(f"Distance: {dist:.1f} {self._model.unit()}")
 
     def _refresh_template_status(self) -> None:
         if not hasattr(self, "_template_status_lbl"):
