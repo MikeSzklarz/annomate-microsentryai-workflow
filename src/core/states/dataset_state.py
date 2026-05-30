@@ -85,7 +85,7 @@ class DatasetState:
         """
         self.annotations.setdefault(image_name, []).append(
             {
-                "category_name": category,
+                "category_name": category.lower(),
                 "polygon": polygon,
                 "thickness": thickness,
                 "visible": True,
@@ -106,7 +106,7 @@ class DatasetState:
         """Change the category_name of a specific annotation."""
         annos = self.annotations.get(image_name, [])
         if 0 <= index < len(annos):
-            annos[index]["category_name"] = new_class
+            annos[index]["category_name"] = new_class.lower()
 
     def delete_annotation(self, image_name: str, index: int) -> None:
         """Remove the annotation at *index* for *image_name*.
@@ -159,6 +159,7 @@ class DatasetState:
             name (str): Class label to register. Duplicates are ignored.
             color (tuple): RGB color tuple to associate with the class.
         """
+        name = name.lower()
         if name not in self.class_names:
             self.class_names.append(name)
             self.class_colors[name] = color

@@ -273,8 +273,8 @@ class ProjectIO:
         # Class registry
         class_names = ds.get("class_names", [])
         if class_names:
-            dataset_state.class_names = list(class_names)
-            raw_colors = ds.get("class_colors", {})
+            dataset_state.class_names = [n.lower() for n in class_names]
+            raw_colors = {k.lower(): v for k, v in ds.get("class_colors", {}).items()}
             dataset_state.class_colors = {}
             for i, name in enumerate(dataset_state.class_names):
                 raw = raw_colors.get(name)
@@ -498,7 +498,7 @@ class ProjectIO:
 
         cat_map = {}
         for c in data.get("categories", []):
-            name = c["name"]
+            name = c["name"].lower()
             cat_map[c["id"]] = name
             if name not in dataset_state.class_names:
                 idx = len(dataset_state.class_names)

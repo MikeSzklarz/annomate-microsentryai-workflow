@@ -39,7 +39,7 @@ def test_annotation_rows_reflect_current_image_annotations():
     table_model.set_current_row(0)
 
     assert table_model.rowCount() == 3
-    assert table_model.index(0, AnnotationColumns.CLASS).data() == "Beta"
+    assert table_model.index(0, AnnotationColumns.CLASS).data() == "beta"
     assert table_model.index(1, AnnotationColumns.VERTICES).data() == "4"
     assert table_model.headerData(AnnotationColumns.AREA, Qt.Horizontal) == "Area (px)"
     assert table_model.index(1, AnnotationColumns.AREA).data() == "4"
@@ -157,7 +157,7 @@ def test_class_column_updates_source_annotation():
     table_model.set_current_row(0)
 
     assert table_model.setData(
-        table_model.index(0, AnnotationColumns.CLASS), "Gamma", Qt.EditRole
+        table_model.index(0, AnnotationColumns.CLASS), "gamma", Qt.EditRole
     )
 
-    assert dataset_model.get_annotations(0)[0]["category_name"] == "Gamma"
+    assert dataset_model.get_annotations(0)[0]["category_name"] == "gamma"

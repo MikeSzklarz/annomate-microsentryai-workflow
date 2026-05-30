@@ -169,7 +169,7 @@ class DatasetTableModel(QAbstractTableModel):
             len(polygon),
         )
 
-        self.state.add_annotation(filename, category, polygon, thickness)
+        self.state.add_annotation(filename, category.lower(), polygon, thickness)
         self._emit_row(row)
 
     def update_annotation_thickness(
@@ -295,6 +295,7 @@ class DatasetTableModel(QAbstractTableModel):
             bool: ``True`` if the class was added; ``False`` if *name* was
                 already registered.
         """
+        name = name.lower()
         if name in self.state.class_names:
             return False
         self.state.add_class(name, color)

@@ -167,7 +167,7 @@ class TestCocoRoundTrip:
         ds_dst = DatasetState()
         pio.import_coco(coco_path, ds_dst)
 
-        assert "Defect" in ds_dst.class_names
+        assert "defect" in ds_dst.class_names
         assert "img001.jpg" in ds_dst.annotations
         poly = ds_dst.annotations["img001.jpg"][0]["polygon"]
         assert len(poly) == 3
@@ -181,8 +181,8 @@ class TestCocoRoundTrip:
         ds_dst.add_class("Existing", (0, 255, 0))
         pio.import_coco(coco_path, ds_dst)
 
-        assert "Existing" in ds_dst.class_names
-        assert "Defect" in ds_dst.class_names
+        assert "existing" in ds_dst.class_names
+        assert "defect" in ds_dst.class_names
 
 
 # ------------------------------------------------------------------ #
@@ -216,8 +216,8 @@ class TestProjectRoundTrip:
         ds2.image_files = list(ds.image_files)
         pio.apply_project_to_states(data, ds2, ValidationState(), InferenceState())
 
-        assert "Defect" in ds2.class_names
-        assert ds2.class_colors["Defect"] == (255, 0, 0)
+        assert "defect" in ds2.class_names
+        assert ds2.class_colors["defect"] == (255, 0, 0)
 
     def test_round_trip_restores_annotations(self, pio, tmp_path):
         ds = _make_dataset(tmp_path)

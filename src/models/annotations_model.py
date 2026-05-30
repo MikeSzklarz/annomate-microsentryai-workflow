@@ -107,7 +107,7 @@ class AnnotationTableModel(QAbstractTableModel):
             or index.column() != AnnotationColumns.CLASS
         ):
             return False
-        name = str(value).strip()
+        name = str(value).strip().lower()
         if not name or name not in self._dataset_model.get_class_names():
             return False
         annotation_idx = index.row()

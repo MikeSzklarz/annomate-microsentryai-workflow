@@ -65,15 +65,15 @@ class TestQueryAPI:
 
     def test_get_class_color_known(self, model):
         model.add_class("Defect", (255, 0, 0))
-        assert model.get_class_color("Defect") == (255, 0, 0)
+        assert model.get_class_color("defect") == (255, 0, 0)
 
     def test_class_visibility_defaults_visible_and_toggles(self, model):
         model.add_class("Defect", (255, 0, 0))
 
-        assert model.is_class_visible("Defect") is True
-        assert model.toggle_class_visibility("Defect") is False
-        assert model.is_class_visible("Defect") is False
-        assert model.toggle_class_visibility("Defect") is True
+        assert model.is_class_visible("defect") is True
+        assert model.toggle_class_visibility("defect") is False
+        assert model.is_class_visible("defect") is False
+        assert model.toggle_class_visibility("defect") is True
 
     def test_annotation_visibility_defaults_visible_and_toggles(self, model):
         model.load_folder("/fake", ["img.jpg"])
@@ -90,8 +90,8 @@ class TestQueryAPI:
         model.add_annotation(0, "Other", [(0, 0), (1, 0), (1, 1)])
         model.add_annotation(1, "Defect", [(0, 0), (1, 0), (1, 1)])
 
-        assert model.get_class_annotation_count("Defect") == 2
-        assert model.get_class_annotation_count("Missing") == 0
+        assert model.get_class_annotation_count("defect") == 2
+        assert model.get_class_annotation_count("missing") == 0
 
     def test_get_inspector_empty_initially(self, model):
         model.load_folder("/fake", ["img.jpg"])

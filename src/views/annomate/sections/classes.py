@@ -419,7 +419,7 @@ class ClassesSection(QWidget):
         return DEFAULT_CLASS_COLORS[0]
 
     def _add_class(self) -> None:
-        name = self._name_input.text().strip()
+        name = self._name_input.text().strip().lower()
         if not name or name in self.dataset_model.get_class_names():
             return
         self.dataset_model.add_class(name, self._pick_next_unique_color())

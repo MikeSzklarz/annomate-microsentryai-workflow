@@ -37,9 +37,9 @@ def test_class_rows_reflect_dataset_class_names():
 
     assert table_model.rowCount() == 3
     assert [table_model.class_name(row) for row in range(3)] == [
-        "Beta",
+        "beta",
         "alpha",
-        "Gamma",
+        "gamma",
     ]
 
 
@@ -66,7 +66,7 @@ def test_visibility_column_reflects_model_state():
     assert index.data(VISIBLE_ROLE) is True
     assert index.data(Qt.DisplayRole) == "Hide"
 
-    dataset_model.set_class_visible("Beta", False)
+    dataset_model.set_class_visible("beta", False)
 
     assert index.data(VISIBLE_ROLE) is False
     assert index.data(Qt.DisplayRole) == "Show"
@@ -79,7 +79,7 @@ def test_class_name_sort_is_case_insensitive():
 
     proxy.sort(ClassColumns.CLASS, Qt.AscendingOrder)
 
-    assert _proxy_names(proxy) == ["alpha", "Beta", "Gamma"]
+    assert _proxy_names(proxy) == ["alpha", "beta", "gamma"]
 
 
 def test_image_and_total_counts_sort_numerically():
@@ -89,10 +89,10 @@ def test_image_and_total_counts_sort_numerically():
     proxy.setSourceModel(table_model)
 
     proxy.sort(ClassColumns.IMAGE, Qt.DescendingOrder)
-    assert _proxy_names(proxy) == ["Beta", "alpha", "Gamma"]
+    assert _proxy_names(proxy) == ["beta", "alpha", "gamma"]
 
     proxy.sort(ClassColumns.TOTAL, Qt.AscendingOrder)
-    assert _proxy_names(proxy) == ["alpha", "Gamma", "Beta"]
+    assert _proxy_names(proxy) == ["alpha", "gamma", "beta"]
 
 
 def test_proxy_index_exposes_source_class_name_after_sorting():
@@ -103,4 +103,4 @@ def test_proxy_index_exposes_source_class_name_after_sorting():
     proxy.sort(ClassColumns.CLASS, Qt.DescendingOrder)
     first = proxy.index(0, ClassColumns.DELETE)
 
-    assert first.data(CLASS_NAME_ROLE) == "Gamma"
+    assert first.data(CLASS_NAME_ROLE) == "gamma"

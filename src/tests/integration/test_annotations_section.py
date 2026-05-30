@@ -11,13 +11,13 @@ from views.annomate.sections.annotations import AnnotationsSection
 @pytest.fixture
 def annotations_section(qtbot):
     model = DatasetTableModel(DatasetState())
-    model.add_class("Crack", (255, 0, 0))
-    model.add_class("Scratch", (0, 255, 0))
-    model.add_class("Void", (0, 0, 255))
+    model.add_class("crack", (255, 0, 0))
+    model.add_class("scratch", (0, 255, 0))
+    model.add_class("void", (0, 0, 255))
     model.load_folder("/fake", ["img.jpg"])
-    model.add_annotation(0, "Scratch", [(0, 0), (1, 0), (1, 1)])
-    model.add_annotation(0, "Crack", [(0, 0), (2, 0), (2, 2), (0, 2)])
-    model.add_annotation(0, "Void", [(0, 0), (3, 0), (3, 3)])
+    model.add_annotation(0, "scratch", [(0, 0), (1, 0), (1, 1)])
+    model.add_annotation(0, "crack", [(0, 0), (2, 0), (2, 2), (0, 2)])
+    model.add_annotation(0, "void", [(0, 0), (3, 0), (3, 3)])
 
     widget = AnnotationsSection(model)
     qtbot.addWidget(widget)
@@ -81,7 +81,7 @@ def test_deleting_annotation_after_sort_targets_source_index(annotations_section
 
     annos = model.get_annotations(0)
     assert len(annos) == 2
-    assert [anno["category_name"] for anno in annos] == ["Crack", "Void"]
+    assert [anno["category_name"] for anno in annos] == ["crack", "void"]
 
 
 def test_visibility_button_after_sort_targets_source_index(annotations_section, qtbot):
@@ -127,6 +127,6 @@ def test_editing_class_column_updates_source_annotation(annotations_section):
     widget, model = annotations_section
     source_index = widget._table_model.index(0, AnnotationColumns.CLASS)
 
-    assert widget._table_model.setData(source_index, "Void", Qt.EditRole)
+    assert widget._table_model.setData(source_index, "void", Qt.EditRole)
 
-    assert model.get_annotations(0)[0]["category_name"] == "Void"
+    assert model.get_annotations(0)[0]["category_name"] == "void"

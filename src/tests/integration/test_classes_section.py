@@ -45,13 +45,13 @@ def _click_index(qtbot, widget, proxy_index) -> None:
 def test_clicking_sorted_row_emits_correct_class(classes_section, qtbot):
     widget, _model = classes_section
     widget._proxy.sort(ClassColumns.CLASS, Qt.AscendingOrder)
-    index = _proxy_index_for_class(widget, "Gamma", ClassColumns.CLASS)
+    index = _proxy_index_for_class(widget, "gamma", ClassColumns.CLASS)
 
     with qtbot.waitSignal(widget.class_selected, timeout=1000) as signal:
         _click_index(qtbot, widget, index)
 
-    assert signal.args == ["Gamma"]
-    assert widget._selected_name == "Gamma"
+    assert signal.args == ["gamma"]
+    assert widget._selected_name == "gamma"
 
 
 def test_adding_class_selects_new_class_under_active_sort(classes_section, qtbot):
@@ -62,9 +62,9 @@ def test_adding_class_selects_new_class_under_active_sort(classes_section, qtbot
     with qtbot.waitSignal(widget.class_selected, timeout=1000) as signal:
         widget._add_class()
 
-    assert signal.args == ["Delta"]
-    assert "Delta" in model.get_class_names()
-    assert widget._selected_name == "Delta"
+    assert signal.args == ["delta"]
+    assert "delta" in model.get_class_names()
+    assert widget._selected_name == "delta"
 
 
 def test_deleting_class_after_sort_targets_correct_class(
@@ -81,15 +81,15 @@ def test_deleting_class_after_sort_targets_correct_class(
     _click_index(qtbot, widget, index)
 
     assert "alpha" not in model.get_class_names()
-    assert "Beta" in model.get_class_names()
-    assert "Gamma" in model.get_class_names()
+    assert "beta" in model.get_class_names()
+    assert "gamma" in model.get_class_names()
 
 
 def test_deleting_class_with_annotations_can_be_cancelled(
     classes_section, qtbot, monkeypatch
 ):
     widget, model = classes_section
-    index = _proxy_index_for_class(widget, "Beta", ClassColumns.DELETE)
+    index = _proxy_index_for_class(widget, "beta", ClassColumns.DELETE)
     monkeypatch.setattr(
         "views.annomate.sections.classes.QMessageBox.question",
         lambda *args, **kwargs: QMessageBox.No,
@@ -97,8 +97,8 @@ def test_deleting_class_with_annotations_can_be_cancelled(
 
     _click_index(qtbot, widget, index)
 
-    assert "Beta" in model.get_class_names()
-    assert model.get_class_annotation_count("Beta") == 2
+    assert "beta" in model.get_class_names()
+    assert model.get_class_annotation_count("beta") == 2
 
 
 def test_deleting_class_without_annotations_does_not_prompt(
@@ -107,7 +107,7 @@ def test_deleting_class_without_annotations_does_not_prompt(
     widget, model = classes_section
     model.add_class("Empty", (1, 2, 3))
     widget._table_model.refresh_classes()
-    index = _proxy_index_for_class(widget, "Empty", ClassColumns.DELETE)
+    index = _proxy_index_for_class(widget, "empty", ClassColumns.DELETE)
 
     def fail_if_prompted(*args, **kwargs):
         raise AssertionError("Delete confirmation should not be shown")
@@ -119,7 +119,7 @@ def test_deleting_class_without_annotations_does_not_prompt(
 
     _click_index(qtbot, widget, index)
 
-    assert "Empty" not in model.get_class_names()
+    assert "empty" not in model.get_class_names()
 
 
 def test_visibility_button_after_sort_targets_correct_class(classes_section, qtbot):
@@ -130,8 +130,8 @@ def test_visibility_button_after_sort_targets_correct_class(classes_section, qtb
     _click_index(qtbot, widget, index)
 
     assert model.is_class_visible("alpha") is False
-    assert model.is_class_visible("Beta") is True
-    assert model.is_class_visible("Gamma") is True
+    assert model.is_class_visible("beta") is True
+    assert model.is_class_visible("gamma") is True
 
     _click_index(qtbot, widget, index)
 
@@ -143,7 +143,7 @@ def test_color_column_updates_correct_class_after_sort(
 ):
     widget, model = classes_section
     widget._proxy.sort(ClassColumns.CLASS, Qt.DescendingOrder)
-    index = _proxy_index_for_class(widget, "Beta", ClassColumns.COLOR)
+    index = _proxy_index_for_class(widget, "beta", ClassColumns.COLOR)
 
     monkeypatch.setattr(
         "views.annomate.sections.classes.QColorDialog.getColor",
@@ -152,7 +152,7 @@ def test_color_column_updates_correct_class_after_sort(
 
     _click_index(qtbot, widget, index)
 
-    assert model.get_class_color("Beta") == (101, 112, 123)
+    assert model.get_class_color("beta") == (101, 112, 123)
 
 
 def test_classes_section_uses_table_view(classes_section):
