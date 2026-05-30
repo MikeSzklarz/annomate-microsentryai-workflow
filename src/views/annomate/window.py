@@ -654,6 +654,7 @@ class AnnoMateWindow(QWidget):
         if self.dataset_model.rowCount() > 0:
             self._load_row(0)
             self._start_pending_center_crop_preload()
+            self._start_pending_inference()
         else:
             self._current_row = -1
             self._current_bgr = None
