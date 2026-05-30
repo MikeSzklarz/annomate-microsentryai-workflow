@@ -65,6 +65,7 @@ class CenterTemplateController(QObject):
         self._loaded_template = None   # np.ndarray | None — in-memory template cache
         self._match_cache: dict = {}   # path -> (cx, cy, score)
         self._worker = None            # CenterCropWorker | None
+        center_template_model.template_changed.connect(self.invalidate_cache)
 
     def save_template(
         self,
@@ -133,6 +134,17 @@ class CenterTemplateController(QObject):
         self._match_cache.clear()
         self._model.clear_template()
         self.template_cleared.emit()
+
+    def invalidate_cache(self) -> None:
+        """Flush the per-image match cache and stop any running preload worker.
+
+        Called automatically when the model's template_changed signal fires
+        (e.g. project load, new template saved) so stale crop positions from
+        a previous project can never bleed into the current one.
+        """
+        self._stop_worker()
+        self._loaded_template = None
+        self._match_cache.clear()
 
     def match_image(self, image_bgr, image_path: str = "") -> tuple[float, float, float] | None:
         if image_path and image_path in self._match_cache:
