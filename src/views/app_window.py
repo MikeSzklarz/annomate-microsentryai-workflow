@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QAction, QKeySequence
 
-from views.validation.window import ValidationWindow
 from views.annomate.window import AnnoMateWindow
 
 _APP_TITLE = "AnnoMate & MicroSentryAI"
@@ -32,10 +31,8 @@ class AppWindow(QMainWindow):
     Args:
         dataset_model: DatasetTableModel instance.
         inference_model: InferenceModel instance.
-        validation_model: ValidationModel instance.
         io_controller: IOController instance.
         inference_controller: InferenceController instance.
-        validation_controller: ValidationController instance.
         project_controller: ProjectController instance.
     """
 
@@ -43,10 +40,8 @@ class AppWindow(QMainWindow):
         self,
         dataset_model,
         inference_model,
-        validation_model,
         io_controller,
         inference_controller,
-        validation_controller,
         project_controller,
         calibration_model=None,
         center_template_model=None,
@@ -58,10 +53,8 @@ class AppWindow(QMainWindow):
 
         self.dataset_model = dataset_model
         self.inference_model = inference_model
-        self.validation_model = validation_model
         self.io_controller = io_controller
         self.inference_controller = inference_controller
-        self.validation_controller = validation_controller
         self.project_controller = project_controller
         self.calibration_model = calibration_model
         self.center_template_model = center_template_model
@@ -69,9 +62,6 @@ class AppWindow(QMainWindow):
         self._settings = QSettings("LANL", "AnnoMateMicroSentryAI")
 
         # Sub-views
-        self.validation_view = ValidationWindow(validation_model, validation_controller)
-        self.validation_view.setWindowTitle("Validation")
-        self.validation_view.resize(900, 650)
         self.annomate_view = AnnoMateWindow(
             dataset_model,
             io_controller,
@@ -152,9 +142,6 @@ class AppWindow(QMainWindow):
         add(data_menu, "Export Binary Masks…", "", self._export_binary_masks)
         add(data_menu, "Export CSV…", "", self._export_csv)
         add(data_menu, "Export Train Structure…", "", self._export_train_structure)
-
-        validation_menu = self.menuBar().addMenu("&Validation")
-        add(validation_menu, "Open Validation…", "", self._open_validation)
 
         view_menu = self.menuBar().addMenu("&Microsentry")
         self._ms_action = QAction("Enable MicroSentryAI", self)
@@ -480,11 +467,6 @@ class AppWindow(QMainWindow):
         if self.center_template_controller is not None:
             self.center_template_controller.shutdown()
         self.inference_controller.shutdown()
-        self.validation_controller.shutdown()
         self.annomate_view.shutdown()
         super().closeEvent(event)
 
-    def _open_validation(self) -> None:
-        self.validation_view.show()
-        self.validation_view.raise_()
-        self.validation_view.activateWindow()

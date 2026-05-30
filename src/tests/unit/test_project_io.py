@@ -8,7 +8,6 @@ from core.states.calibration_state import CalibrationState
 from core.states.dataset_state import DatasetState
 from core.states.center_template_state import CenterTemplateState
 from core.states.inference_state import InferenceState
-from core.states.validation_state import ValidationState
 
 
 # ------------------------------------------------------------------ #
@@ -29,11 +28,6 @@ def dataset_state():
 @pytest.fixture
 def inference_state():
     return InferenceState()
-
-
-@pytest.fixture
-def validation_state():
-    return ValidationState()
 
 
 def _make_dataset(tmp_path):
@@ -193,12 +187,10 @@ class TestCocoRoundTrip:
 class TestProjectRoundTrip:
     def test_save_creates_required_files(self, pio, tmp_path):
         ds = _make_dataset(tmp_path)
-        vs = ValidationState()
-        vs.poly_path = "/some/path"
         inf = InferenceState()
 
         proj_dir = str(tmp_path / "proj")
-        pio.save_project(proj_dir, "myproject", ds, vs, inf)
+        pio.save_project(proj_dir, "myproject", ds, inf)
 
         assert (tmp_path / "proj" / "myproject.annoproj").exists()
         assert (tmp_path / "proj" / "annotations.coco.json").exists()
@@ -207,14 +199,14 @@ class TestProjectRoundTrip:
         ds = _make_dataset(tmp_path)
         proj_dir = str(tmp_path / "proj")
         path = pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), InferenceState()
+            proj_dir, "myproject", ds, InferenceState()
         )
 
         data = pio.load_project(path)
         ds2 = DatasetState()
         ds2.image_dir = ds.image_dir
         ds2.image_files = list(ds.image_files)
-        pio.apply_project_to_states(data, ds2, ValidationState(), InferenceState())
+        pio.apply_project_to_states(data, ds2, InferenceState())
 
         assert "defect" in ds2.class_names
         assert ds2.class_colors["defect"] == (255, 0, 0)
@@ -223,14 +215,14 @@ class TestProjectRoundTrip:
         ds = _make_dataset(tmp_path)
         proj_dir = str(tmp_path / "proj")
         path = pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), InferenceState()
+            proj_dir, "myproject", ds, InferenceState()
         )
 
         data = pio.load_project(path)
         ds2 = DatasetState()
         ds2.image_dir = ds.image_dir
         ds2.image_files = list(ds.image_files)
-        pio.apply_project_to_states(data, ds2, ValidationState(), InferenceState())
+        pio.apply_project_to_states(data, ds2, InferenceState())
 
         assert "img001.jpg" in ds2.annotations
         assert len(ds2.annotations["img001.jpg"]) == 1
@@ -239,33 +231,17 @@ class TestProjectRoundTrip:
         ds = _make_dataset(tmp_path)
         proj_dir = str(tmp_path / "proj")
         path = pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), InferenceState()
+            proj_dir, "myproject", ds, InferenceState()
         )
 
         data = pio.load_project(path)
         ds2 = DatasetState()
         ds2.image_dir = ds.image_dir
         ds2.image_files = list(ds.image_files)
-        vs2 = ValidationState()
-        pio.apply_project_to_states(data, ds2, vs2, InferenceState())
+        pio.apply_project_to_states(data, ds2, InferenceState())
 
         assert ds2.inspectors.get("img001.jpg") == "Alice"
         assert ds2.notes.get("img001.jpg") == "test note"
-
-    def test_round_trip_restores_validation_paths(self, pio, tmp_path):
-        ds = _make_dataset(tmp_path)
-        vs = ValidationState()
-        vs.poly_path = "/poly"
-        vs.json_path = "/ann.json"
-        proj_dir = str(tmp_path / "proj")
-        path = pio.save_project(proj_dir, "myproject", ds, vs, InferenceState())
-
-        data = pio.load_project(path)
-        vs2 = ValidationState()
-        pio.apply_project_to_states(data, DatasetState(), vs2, InferenceState())
-
-        assert vs2.poly_path == "/poly"
-        assert vs2.json_path == "/ann.json"
 
     def test_round_trip_restores_inference_cache(self, pio, tmp_path):
         ds = _make_dataset(tmp_path)
@@ -274,11 +250,11 @@ class TestProjectRoundTrip:
         inf.labels = {"img001.jpg": "ANOMALY"}
         inf.inference_cache = {"img001.jpg": 0.87}
         proj_dir = str(tmp_path / "proj")
-        path = pio.save_project(proj_dir, "myproject", ds, ValidationState(), inf)
+        path = pio.save_project(proj_dir, "myproject", ds, inf)
 
         data = pio.load_project(path)
         inf2 = InferenceState()
-        pio.apply_project_to_states(data, DatasetState(), ValidationState(), inf2)
+        pio.apply_project_to_states(data, DatasetState(), inf2)
 
         assert inf2.inference_cache.get("img001.jpg") == pytest.approx(0.87)
         assert inf2.scores.get("img001.jpg") == pytest.approx(0.87)
@@ -293,13 +269,13 @@ class TestProjectRoundTrip:
 
         proj_dir = str(tmp_path / "proj")
         path = pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), inf, save_score_maps=True
+            proj_dir, "myproject", ds, inf, save_score_maps=True
         )
         assert (tmp_path / "proj" / "scoremaps.npz").exists()
 
         data = pio.load_project(path)
         inf2 = InferenceState()
-        pio.apply_project_to_states(data, DatasetState(), ValidationState(), inf2)
+        pio.apply_project_to_states(data, DatasetState(), inf2)
 
         assert "img001.jpg" in inf2.score_maps
         np.testing.assert_array_almost_equal(inf2.score_maps["img001.jpg"], arr)
@@ -311,7 +287,7 @@ class TestProjectRoundTrip:
 
         proj_dir = str(tmp_path / "proj")
         pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), inf, save_score_maps=False
+            proj_dir, "myproject", ds, inf, save_score_maps=False
         )
 
         assert not (tmp_path / "proj" / "scoremaps.npz").exists()
@@ -320,7 +296,7 @@ class TestProjectRoundTrip:
         ds = _make_dataset(tmp_path)
         proj_dir = str(tmp_path / "proj")
         path = pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), InferenceState()
+            proj_dir, "myproject", ds, InferenceState()
         )
 
         # Remove the COCO file to simulate a corrupted/moved project
@@ -331,14 +307,14 @@ class TestProjectRoundTrip:
         ds2.image_dir = ds.image_dir
         ds2.image_files = list(ds.image_files)
         # Should not raise — annotations simply remain empty
-        pio.apply_project_to_states(data, ds2, ValidationState(), InferenceState())
+        pio.apply_project_to_states(data, ds2, InferenceState())
         assert ds2.annotations == {}
 
     def test_relative_path_resolution(self, pio, tmp_path):
         ds = _make_dataset(tmp_path)
         proj_dir = str(tmp_path / "proj")
         path = pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), InferenceState()
+            proj_dir, "myproject", ds, InferenceState()
         )
 
         # Manually strip the absolute key to force relative-path fallback
@@ -354,7 +330,7 @@ class TestProjectRoundTrip:
 
         # 1. Capture the returned path
         path = pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), InferenceState()
+            proj_dir, "myproject", ds, InferenceState()
         )
 
         # 2. Use the returned path to read the file!
@@ -374,7 +350,6 @@ class TestProjectRoundTrip:
             str(proj_dir),
             "myproject",
             ds,
-            ValidationState(),
             InferenceState(),
             calibration_state=state,
         )
@@ -384,7 +359,6 @@ class TestProjectRoundTrip:
         pio.apply_project_to_states(
             data,
             DatasetState(),
-            ValidationState(),
             InferenceState(),
             calibration_state=restored,
         )
@@ -400,7 +374,6 @@ class TestProjectRoundTrip:
         pio.apply_project_to_states(
             {"calibration": {"scale": 0.05, "unit": "mm"}},
             DatasetState(),
-            ValidationState(),
             InferenceState(),
             calibration_state=restored,
         )
@@ -418,7 +391,6 @@ class TestProjectRoundTrip:
         pio.apply_project_to_states(
             {},
             DatasetState(),
-            ValidationState(),
             InferenceState(),
             calibration_state=restored,
         )
@@ -451,7 +423,6 @@ class TestProjectRoundTrip:
             str(proj_dir),
             "myproject",
             ds,
-            ValidationState(),
             InferenceState(),
             center_template_state=state,
         )
@@ -461,7 +432,6 @@ class TestProjectRoundTrip:
         pio.apply_project_to_states(
             data,
             DatasetState(),
-            ValidationState(),
             InferenceState(),
             center_template_state=restored,
         )
@@ -486,7 +456,6 @@ class TestProjectRoundTrip:
             str(proj_dir),
             "myproject",
             ds,
-            ValidationState(),
             InferenceState(),
             center_template_state=state,
         )
@@ -496,7 +465,6 @@ class TestProjectRoundTrip:
         pio.apply_project_to_states(
             data,
             DatasetState(),
-            ValidationState(),
             InferenceState(),
             center_template_state=restored,
         )

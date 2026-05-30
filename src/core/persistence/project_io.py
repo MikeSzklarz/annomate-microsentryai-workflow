@@ -47,7 +47,6 @@ class ProjectIO:
         project_dir: str,
         project_name: str,
         dataset_state,
-        validation_state,
         inference_state,
         created_at: Optional[str] = None,
         save_score_maps: bool = True,
@@ -65,7 +64,6 @@ class ProjectIO:
             project_dir: Directory that will contain all project files.
             project_name: Human-readable project name (used as filename stem).
             dataset_state: DatasetState instance.
-            validation_state: ValidationState instance.
             inference_state: InferenceState instance.
             created_at: ISO timestamp from the original save; if None, uses now.
             save_score_maps: When True, write inference score maps to NPZ.
@@ -118,14 +116,6 @@ class ProjectIO:
                 },
             },
             "annotations_file": _COCO_FILENAME,
-            "validation": {
-                "poly_path": validation_state.poly_path,
-                "json_path": validation_state.json_path,
-                "mask_out_path": validation_state.mask_out_path,
-                "gt_path": validation_state.gt_path,
-                "pred_path": validation_state.pred_path,
-                "eval_out_path": validation_state.eval_out_path,
-            },
             "review_status": review_status,
             "review_decisions": {
                 fname: dataset_state.review_decisions[fname]
@@ -249,18 +239,17 @@ class ProjectIO:
         self,
         project_data: dict,
         dataset_state,
-        validation_state,
         inference_state,
         calibration_state=None,
         center_template_state=None,
     ) -> None:
-        """Mutate the three state objects from load_project() output.
+        """Mutate state objects from load_project() output.
 
         Does NOT touch image_dir or image_files — those must be set by the
         caller before invoking this method (e.g. via ProjectController which
         scans the directory first). This method repopulates annotations,
-        class registry, inspectors, notes, validation paths, and inference
-        cache on top of whatever image list is already in state.
+        class registry, inspectors, notes, and inference cache on top of
+        whatever image list is already in state.
 
         Args:
             project_data: Dict returned by load_project().
@@ -310,15 +299,6 @@ class ProjectIO:
         # Image-level review decisions
         for fname, decision in project_data.get("review_decisions", {}).items():
             dataset_state.review_decisions[fname] = decision
-
-        # Validation paths
-        vdata = project_data.get("validation", {})
-        validation_state.poly_path = vdata.get("poly_path", "")
-        validation_state.json_path = vdata.get("json_path", "")
-        validation_state.mask_out_path = vdata.get("mask_out_path", "")
-        validation_state.gt_path = vdata.get("gt_path", "")
-        validation_state.pred_path = vdata.get("pred_path", "")
-        validation_state.eval_out_path = vdata.get("eval_out_path", "")
 
         # Inference scores, labels, and cache (fast restore — no NPZ needed)
         inf_data = project_data.get("inference", {})

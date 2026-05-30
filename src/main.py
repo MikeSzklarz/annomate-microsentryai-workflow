@@ -11,19 +11,16 @@ from PySide6.QtWidgets import QApplication
 
 from core.states.dataset_state import DatasetState
 from core.states.inference_state import InferenceState
-from core.states.validation_state import ValidationState
 from core.states.calibration_state import CalibrationState
 from core.states.center_template_state import CenterTemplateState
 
 from models.dataset_model import DatasetTableModel
 from models.inference_model import InferenceModel
-from models.validation_model import ValidationModel
 from models.calibration_model import CalibrationModel
 from models.center_template_model import CenterTemplateModel
 
 from controllers.io_controller import IOController
 from controllers.inference_controller import InferenceController
-from controllers.validation_controller import ValidationController
 from controllers.project_controller import ProjectController
 from controllers.center_template_controller import CenterTemplateController
 
@@ -44,26 +41,22 @@ def main() -> None:
     # States
     dataset_state = DatasetState()
     inference_state = InferenceState()
-    validation_state = ValidationState()
     calibration_state = CalibrationState()
     center_template_state = CenterTemplateState()
 
     # Models
     dataset_model = DatasetTableModel(dataset_state)
     inference_model = InferenceModel(inference_state)
-    validation_model = ValidationModel(validation_state)
     calibration_model = CalibrationModel(calibration_state)
     center_template_model = CenterTemplateModel(center_template_state)
 
     # Controllers
     io_controller = IOController(dataset_model)
     inference_controller = InferenceController(dataset_model, inference_model)
-    validation_controller = ValidationController(validation_model)
     center_template_controller = CenterTemplateController(center_template_model)
     project_controller = ProjectController(
         dataset_model,
         inference_model,
-        validation_model,
         io_controller,
         inference_controller,
         calibration_model=calibration_model,
@@ -74,10 +67,8 @@ def main() -> None:
     window = AppWindow(
         dataset_model=dataset_model,
         inference_model=inference_model,
-        validation_model=validation_model,
         io_controller=io_controller,
         inference_controller=inference_controller,
-        validation_controller=validation_controller,
         project_controller=project_controller,
         calibration_model=calibration_model,
         center_template_model=center_template_model,

@@ -39,7 +39,6 @@ class ProjectController(QObject):
     Attributes:
         dataset_model: DatasetTableModel.
         inference_model: InferenceModel.
-        validation_model: ValidationModel.
         io_controller: IOController (used for image-dir scans).
         inference_controller: InferenceController (for model_path tracking).
 
@@ -61,7 +60,6 @@ class ProjectController(QObject):
         self,
         dataset_model,
         inference_model,
-        validation_model,
         io_controller,
         inference_controller=None,
         calibration_model=None,
@@ -71,7 +69,6 @@ class ProjectController(QObject):
         super().__init__(parent)
         self._dataset_model = dataset_model
         self._inference_model = inference_model
-        self._validation_model = validation_model
         self._io_controller = io_controller
         self._inference_controller = inference_controller
         self._calibration_model = calibration_model
@@ -158,7 +155,6 @@ class ProjectController(QObject):
         state.clear()
         state.reset_classes()
         self._inference_model.state.clear()
-        self._validation_model.state.clear()
         if self._center_template_model is not None:
             self._center_template_model.clear_template()
 
@@ -231,7 +227,6 @@ class ProjectController(QObject):
             self._project_io.apply_project_to_states(
                 project_data,
                 ds,
-                self._validation_model.state,
                 self._inference_model.state,
                 calibration_state=calib_state,
                 center_template_state=center_template_state,
@@ -330,7 +325,6 @@ class ProjectController(QObject):
             project_dir=project_dir,
             project_name=project_name,
             dataset_state=self._dataset_model.state,
-            validation_state=self._validation_model.state,
             inference_state=self._inference_model.state,
             created_at=self._created_at,
             save_score_maps=True,
@@ -366,7 +360,6 @@ class ProjectController(QObject):
                 project_dir=autosave_dir,
                 project_name=f"{self._project_name}.autosave",
                 dataset_state=self._dataset_model.state,
-                validation_state=self._validation_model.state,
                 inference_state=self._inference_model.state,
                 created_at=self._created_at,
                 save_score_maps=False,
