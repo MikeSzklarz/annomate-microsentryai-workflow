@@ -89,6 +89,7 @@ class AppWindow(QMainWindow):
 
         # React to ProjectController signals
         self.project_controller.dirty_changed.connect(self._update_title)
+        self.project_controller.project_opened.connect(lambda _: self._update_title())
         self.project_controller.project_saved.connect(
             lambda path: self.statusBar().showMessage(f"Saved: {path}", 4000)
         )
