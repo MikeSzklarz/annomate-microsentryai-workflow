@@ -490,6 +490,9 @@ class AnnoMateWindow(QWidget):
         self.viewport_actions.center_template_cleared.connect(
             self._on_center_template_cleared
         )
+        self.viewport_actions.crop_overlay_toggled.connect(
+            self._on_crop_overlay_toggled
+        )
         self.canvas.draw_attempted.connect(self._on_draw_attempted)
 
         # Route thickness signal directly to canvas setter
@@ -876,6 +879,13 @@ class AnnoMateWindow(QWidget):
         self.canvas.set_center_crop(calibrating=False)
         self.viewport_actions.set_center_calibrating(False)
         self._start_pending_center_crop_preload()
+
+    def _on_crop_overlay_toggled(self, checked: bool) -> None:
+        if self._center_template_model is None:
+            return
+        self._center_template_model.set_enabled(checked)
+        if checked and self._current_bgr is not None:
+            self._apply_center_template_match(self._current_bgr)
 
     def _on_center_template_cleared(self) -> None:
         if self._center_template_controller is None:

@@ -70,6 +70,7 @@ class ViewportActionsBar(QFrame):
     center_calibration_started = Signal()
     center_calibration_accepted = Signal()
     center_template_cleared = Signal()
+    crop_overlay_toggled = Signal(bool)
 
     _MARGIN = 12
     _BTN_SIZE = 32
@@ -588,6 +589,7 @@ class ViewportActionsBar(QFrame):
             calibrating=False if not checked else None,
         )
         self._refresh_crop_controls()
+        self.crop_overlay_toggled.emit(checked)
 
     def _on_crop_shape_changed(self, display_name: str) -> None:
         if self._refreshing:
