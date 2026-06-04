@@ -85,15 +85,15 @@ def test_calibrate_and_measure_emit_tool_requests(canvas, calibrated_model, qtbo
     requested = []
     bar.tool_selected.connect(requested.append)
 
-    qtbot.mouseClick(bar._btn_calibrate, Qt.LeftButton)
+    qtbot.mouseClick(bar._btn_calibrate_points, Qt.LeftButton)
     assert requested[-1] == "calibrate"
-    assert bar._btn_calibrate.isChecked()
+    assert bar._btn_calibrate_points.isChecked()
     assert not bar._btn_measure.isChecked()
 
     qtbot.mouseClick(bar._btn_measure, Qt.LeftButton)
     assert requested[-1] == "measure"
     assert bar._btn_measure.isChecked()
-    assert not bar._btn_calibrate.isChecked()
+    assert not bar._btn_calibrate_points.isChecked()
 
     qtbot.mouseClick(bar._btn_measure, Qt.LeftButton)
     assert requested[-1] == ""
@@ -106,12 +106,12 @@ def test_measure_and_grid_settings_enabled_in_default_pixel_mode(canvas, qtbot):
     bar.set_image_loaded(True)
     qtbot.addWidget(bar)
 
-    assert bar._btn_calibrate.isEnabled()
+    assert bar._btn_calibrate_points.isEnabled()
     assert bar._btn_measure.isEnabled()
     assert bar._grid_chk.isEnabled()
     assert model.grid_visible() is True
     assert bar._grid_chk.isChecked()
-    assert "px/px" in bar._status_lbl.text()
+    assert "1px:1px" in bar._calib_status_lbl.text()
 
     model.set_calib_points((0.0, 0.0), (100.0, 0.0))
     assert model.apply_calibration(5.0, "mm")
