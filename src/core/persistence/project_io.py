@@ -642,9 +642,9 @@ class ProjectIO:
     def _filename_to_npz_key(self, fname: str) -> str:
         """Sanitize a filename to a valid NPZ array key."""
         return (
-            fname.replace(".", "__dot__")
+            fname.replace("\\", "/")
+            .replace(".", "__dot__")
             .replace("/", "__slash__")
-            .replace("\\", "__bslash__")
         )
 
     def _npz_key_to_filename(self, key: str) -> str:
@@ -659,7 +659,7 @@ class ProjectIO:
         if not path:
             return path
         try:
-            return os.path.relpath(path, base_dir)
+            return Path(os.path.relpath(path, base_dir)).as_posix()
         except ValueError:
             return path
 
