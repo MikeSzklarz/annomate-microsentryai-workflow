@@ -2,7 +2,7 @@ import os
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
+from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal
 from PySide6.QtGui import QColor, QBrush
 
 from core.states.dataset_state import DatasetState
@@ -27,6 +27,8 @@ class DatasetTableModel(QAbstractTableModel):
         state (DatasetState): The underlying domain state this model wraps.
         headers (list[str]): Column header labels — ``["Filename", "Status"]``.
     """
+
+    classVisibilityChanged = Signal(str, bool)
 
     def __init__(self, state: DatasetState, parent: object = None) -> None:
         """Initialize DatasetTableModel with a domain state object.
@@ -167,7 +169,7 @@ class DatasetTableModel(QAbstractTableModel):
             len(polygon),
         )
 
-        self.state.add_annotation(filename, category, polygon, thickness)
+        self.state.add_annotation(filename, category.lower(), polygon, thickness)
         self._emit_row(row)
 
     def update_annotation_thickness(
@@ -235,6 +237,23 @@ class DatasetTableModel(QAbstractTableModel):
         )
         self._emit_row(row)
 
+    def set_annotation_visible(
+        self, row: int, annotation_idx: int, visible: bool
+    ) -> None:
+        """Set whether a specific annotation renders in the viewport."""
+        if not (0 <= row < self.rowCount()):
+            return
+        self.state.set_annotation_visible(
+            self.state.image_files[row], annotation_idx, visible
+        )
+        self._emit_row(row)
+
+    def toggle_annotation_visibility(self, row: int, annotation_idx: int) -> bool:
+        """Toggle annotation viewport visibility and return the new state."""
+        visible = not self.is_annotation_visible(row, annotation_idx)
+        self.set_annotation_visible(row, annotation_idx, visible)
+        return visible
+
     def set_inspector(self, row: int, value: str) -> None:
         """Assign an inspector name to the image at *row*.
 
@@ -276,6 +295,7 @@ class DatasetTableModel(QAbstractTableModel):
             bool: ``True`` if the class was added; ``False`` if *name* was
                 already registered.
         """
+        name = name.lower()
         if name in self.state.class_names:
             return False
         self.state.add_class(name, color)
@@ -297,6 +317,22 @@ class DatasetTableModel(QAbstractTableModel):
                 self.index(0, 0),
                 self.index(self.rowCount() - 1, self.columnCount() - 1),
             )
+
+    def set_class_visible(self, name: str, visible: bool) -> None:
+        """Set whether annotations for *name* render in the viewport."""
+        if name not in self.state.class_names:
+            return
+        visible = bool(visible)
+        if self.state.is_class_visible(name) == visible:
+            return
+        self.state.set_class_visible(name, visible)
+        self.classVisibilityChanged.emit(name, visible)
+
+    def toggle_class_visibility(self, name: str) -> bool:
+        """Toggle viewport visibility for *name* and return the new state."""
+        visible = not self.is_class_visible(name)
+        self.set_class_visible(name, visible)
+        return visible
 
     def delete_class(self, name: str) -> None:
         """Remove a class and all annotations that reference it.
@@ -370,6 +406,25 @@ class DatasetTableModel(QAbstractTableModel):
             return []
         return self.state.annotations.get(self.state.image_files[row], [])
 
+    def is_annotation_visible(self, row: int, annotation_idx: int) -> bool:
+        """Return whether a specific annotation should render."""
+        if not (0 <= row < self.rowCount()):
+            return True
+        return self.state.is_annotation_visible(
+            self.state.image_files[row], annotation_idx
+        )
+
+    def get_class_annotation_count(self, class_name: str) -> int:
+        """Return the total number of annotations assigned to *class_name*."""
+        total = 0
+        for annotations in self.state.annotations.values():
+            total += sum(
+                1
+                for annotation in annotations
+                if annotation.get("category_name") == class_name
+            )
+        return total
+
     def get_class_names(self) -> list:
         """Return a copy of the ordered class name registry.
 
@@ -392,6 +447,10 @@ class DatasetTableModel(QAbstractTableModel):
                 ``(255, 255, 255)`` for unregistered class names.
         """
         return self.state.class_colors.get(class_name, (255, 255, 255))
+
+    def is_class_visible(self, class_name: str) -> bool:
+        """Return whether annotations for *class_name* should render."""
+        return self.state.is_class_visible(class_name)
 
     def get_used_class_colors(self) -> list:
         """Return all currently assigned RGB color tuples.

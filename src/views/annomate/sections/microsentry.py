@@ -8,7 +8,6 @@ Layout (when model loaded):
   [Segmentation] toggle  +  Threshold slider
   [Accept AI Polygons] button
   ▸ Advanced Settings (collapsible)
-      Smoothing slider
       Simplify Tolerance slider
       Heatmap Minimum slider
 """
@@ -142,20 +141,35 @@ class MicrosentrySection(QWidget):
         self._btn_seg.setCheckable(True)
         self._btn_seg.setToolTip("Show AI segmentation polygons on the canvas")
         self._btn_seg.toggled.connect(self._on_seg_toggled)
-        self._thresh_val = QLabel("95")
+        self._thresh_val = QLabel("95.0")
         self._thresh_val.setStyleSheet("font-size: 11px;")
-        self._thresh_val.setFixedWidth(30)
+        self._thresh_val.setFixedWidth(40)
         self._thresh = QSlider(Qt.Horizontal)
-        self._thresh.setRange(0, 100)
-        self._thresh.setValue(95)
+        self._thresh.setRange(0, 1000)
+        self._thresh.setValue(950)
         self._thresh.valueChanged.connect(
-            lambda v: (self._thresh_val.setText(str(v)), self._debounce.start())
+            lambda v: (
+                self._thresh_val.setText(f"{v / 10:.1f}"),
+                self._debounce.start(),
+            )
+        )
+        self._thresh_dec = QPushButton("<")
+        self._thresh_dec.setFixedWidth(20)
+        self._thresh_dec.clicked.connect(
+            lambda: self._thresh.setValue(self._thresh.value() - 1)
+        )
+        self._thresh_inc = QPushButton(">")
+        self._thresh_inc.setFixedWidth(20)
+        self._thresh_inc.clicked.connect(
+            lambda: self._thresh.setValue(self._thresh.value() + 1)
         )
         seg_row = QHBoxLayout()
         seg_row.setContentsMargins(0, 0, 0, 0)
         seg_row.setSpacing(4)
         seg_row.addWidget(self._btn_seg)
         seg_row.addWidget(self._thresh, stretch=1)
+        seg_row.addWidget(self._thresh_dec)
+        seg_row.addWidget(self._thresh_inc)
         seg_row.addWidget(self._thresh_val)
         lw.addLayout(seg_row)
 
@@ -188,17 +202,6 @@ class MicrosentrySection(QWidget):
         aw = QVBoxLayout(self._advanced_widget)
         aw.setContentsMargins(8, 0, 0, 0)
         aw.setSpacing(4)
-
-        self._sigma_val = QLabel("4")
-        self._sigma_val.setStyleSheet("font-size: 11px;")
-        self._sigma_val.setFixedWidth(30)
-        self._sigma = QSlider(Qt.Horizontal)
-        self._sigma.setRange(0, 16)
-        self._sigma.setValue(4)
-        self._sigma.valueChanged.connect(
-            lambda v: (self._sigma_val.setText(str(v)), self._debounce.start())
-        )
-        aw.addWidget(_slider_row("Smoothing", self._sigma_val, self._sigma))
 
         self._epsilon_val = QLabel("12")
         self._epsilon_val.setStyleSheet("font-size: 11px;")
@@ -263,9 +266,8 @@ class MicrosentrySection(QWidget):
         return {
             "heatmap_enabled": self._btn_heatmap.isChecked(),
             "seg_enabled": self._btn_seg.isChecked(),
-            "seg_pct": self._thresh.value(),
+            "seg_pct": self._thresh.value() / 10.0,
             "alpha": self._alpha.value() / 100.0,
-            "sigma": self._sigma.value(),
             "epsilon": self._epsilon.value(),
             "heat_min": self._heat_min.value(),
         }

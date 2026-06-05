@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 
-from PySide6.QtCore import Qt, QPointF, QRect, Signal
+from PySide6.QtCore import Qt, QPointF, QRect, QRectF, Signal
 from PySide6.QtGui import (
     QPainter,
     QPen,
@@ -26,6 +26,8 @@ from PySide6.QtGui import (
     QWheelEvent,
     QKeyEvent,
     QPaintEvent,
+    QPainterPath,
+    QFontMetricsF,
 )
 from PySide6.QtWidgets import QLabel, QSizePolicy
 
@@ -34,6 +36,8 @@ logger = logging.getLogger("AnnoMate.ImageLabel")
 # Tool Constants
 POLYGON = "polygon"
 SAM_BBOX = "sam_bbox"
+CALIBRATE = "calibrate"
+MEASURE = "measure"
 
 
 class ImageLabel(QLabel):
@@ -72,6 +76,8 @@ class ImageLabel(QLabel):
     samBboxDrawn = Signal(
         float, float, float, float
     )  # x1,y1,x2,y2 in original image coords
+    calibrationPointsPlaced = Signal(tuple, tuple)  # (p1_orig, p2_orig)
+    centerCropChanged = Signal(dict)
 
     def __init__(self, parent: object = None) -> None:
         """Initialize ImageLabel with default zoom, pan, and annotation state.
@@ -93,22 +99,34 @@ class ImageLabel(QLabel):
         self._display_qpix: Optional[QPixmap] = None
         self._heatmap_pix: Optional[QPixmap] = None
         self._heatmap_alpha: float = 0.0
+        self._center_crop_enabled: bool = False
+        self._center_crop_shape: str = "circle"
+        self._center_crop_width: Optional[int] = None
+        self._center_crop_height: Optional[int] = None
+        self._center_crop_opacity: float = 0.37
+        self._center_crop_dot_visible: bool = False
+        self._center_crop_center_x: Optional[float] = None
+        self._center_crop_center_y: Optional[float] = None
+        self._center_crop_calibrating: bool = False
+        self._dragging_center_crop: bool = False
 
         self._base_scale = 1.0
         self._zoom = 1.0
         self._pan = QPointF(0, 0)
+        self._view_is_fit = False
 
         self._panning = False
         self._last_mouse_pos: Optional[QPointF] = None
         self._mouse_pos: Optional[QPointF] = None
 
         self.current_polygon_points: List[QPointF] = []
-        self._overlays: List[Tuple[List[QPointF], QColor]] = []
+        self._overlays: List[Tuple[List[QPointF], QColor, float, bool]] = []
         self._ai_overlays: List[List[QPointF]] = []
 
         # --- UI State Trackers ---
         self.selected_polygon_idx: int = -1
         self._dragging_polygon: bool = False
+        self._polygon_drag_moved: bool = False
         self._dragging_vertex_idx: int = -1
         self._dragging_vertex_poly: int = -1
         self._selected_ai_idx: int = -1
@@ -119,6 +137,11 @@ class ImageLabel(QLabel):
         self._sam_ghost: Optional[Tuple[List[QPointF], float]] = (
             None  # (display_pts, confidence)
         )
+
+        # --- Calibration / measure tool state ---
+        self._calib_model = None  # CalibrationModel; set via set_calibration_model()
+        self._pending_calib_pts: list = []  # accumulates up to 2 original-coord tuples
+        self._watermark_bar_y: int | None = None
 
     def set_image(self, bgr: np.ndarray, max_display_dim: int = 1200) -> None:
         """Load a BGR ndarray and prepare it for display.
@@ -144,9 +167,6 @@ class ImageLabel(QLabel):
             1.0 if max(h, w) <= max_display_dim else max_display_dim / float(max(h, w))
         )
 
-        self._zoom = 1.0
-        self._pan = QPointF(0, 0)
-
         new_w = int(w * self._base_scale)
         new_h = int(h * self._base_scale)
 
@@ -159,6 +179,7 @@ class ImageLabel(QLabel):
         )
         self._display_qpix = QPixmap.fromImage(qimg)
         self.image_loaded.emit(w, h)
+        self.reset_view()
 
         # --- Reset all tracking states on new image ---
         self.clear_current_polygon()
@@ -168,12 +189,20 @@ class ImageLabel(QLabel):
         self._heatmap_alpha = 0.0
         self.selected_polygon_idx = -1
         self._dragging_polygon = False
+        self._polygon_drag_moved = False
         self._dragging_vertex_idx = -1
         self._dragging_vertex_poly = -1
         self._selected_ai_idx = -1
         self._sam_bbox_start = None
         self._sam_bbox_end = None
         self._sam_ghost = None
+        self._pending_calib_pts = []
+        self._center_crop_center_x = None
+        self._center_crop_center_y = None
+        self._dragging_center_crop = False
+        if self._calib_model is not None:
+            self._calib_model.clear_measurement()
+        self._ensure_center_crop_defaults(w, h)
 
         self.update()
 
@@ -197,14 +226,14 @@ class ImageLabel(QLabel):
         s = score_map.astype(np.float32)
         if heat_min_pct > 0:
             thr = np.percentile(s, heat_min_pct)
-            s = np.clip(s - thr, 0.0, None)
+            s = np.clip(s, thr, None)
         s_min, s_max = float(s.min()), float(s.max())
         if s_max <= s_min:
             self._heatmap_pix = None
             self.update()
             return
         s_norm = ((s - s_min) / (s_max - s_min) * 255.0).astype(np.uint8)
-        colored_bgr = cv2.applyColorMap(s_norm, cv2.COLORMAP_JET)
+        colored_bgr = cv2.applyColorMap(s_norm, cv2.COLORMAP_TURBO)
         colored_rgb = cv2.cvtColor(colored_bgr, cv2.COLOR_BGR2RGB)
         pix_w, pix_h = self._display_qpix.width(), self._display_qpix.height()
         resized = cv2.resize(
@@ -235,11 +264,20 @@ class ImageLabel(QLabel):
         self._heatmap_alpha = 0.0
         self._zoom = 1.0
         self._pan = QPointF(0, 0)
+        self._view_is_fit = False
+        self._center_crop_enabled = False
+        self._center_crop_width = None
+        self._center_crop_height = None
+        self._center_crop_center_x = None
+        self._center_crop_center_y = None
+        self._center_crop_calibrating = False
+        self._dragging_center_crop = False
         self.current_polygon_points.clear()
         self._overlays = []
         self._ai_overlays = []
         self.selected_polygon_idx = -1
         self._dragging_polygon = False
+        self._polygon_drag_moved = False
         self._dragging_vertex_idx = -1
         self._dragging_vertex_poly = -1
         self._selected_ai_idx = -1
@@ -252,16 +290,22 @@ class ImageLabel(QLabel):
         """Set the active interaction tool.
 
         Args:
-            tool_name (Optional[str]): Tool identifier — ``"polygon"`` to
-                enable polygon drawing, ``"sam_bbox"`` for SAM-assisted
-                segmentation, or ``None`` to deactivate all tools.
+            tool_name (Optional[str]): Tool identifier — ``"polygon"``,
+                ``"sam_bbox"``, ``"calibrate"``, ``"measure"``, or ``None``.
         """
         if self.current_tool == SAM_BBOX and tool_name != SAM_BBOX:
             self._sam_bbox_start = None
             self._sam_bbox_end = None
             self._sam_ghost = None
+        if self.current_tool in (CALIBRATE, MEASURE) and tool_name not in (
+            CALIBRATE,
+            MEASURE,
+        ):
+            self._pending_calib_pts = []
+            if self._calib_model is not None:
+                self._calib_model.clear_measurement()
         self.current_tool = tool_name
-        if tool_name == SAM_BBOX:
+        if tool_name in (SAM_BBOX, CALIBRATE, MEASURE):
             self.setCursor(Qt.CrossCursor)
         elif tool_name is None:
             self.setCursor(Qt.ArrowCursor)
@@ -288,31 +332,134 @@ class ImageLabel(QLabel):
         self._line_thickness = thickness
         self.update()
 
-    def set_overlays(
-        self, poly_list: List[Tuple[List[Tuple[float, float]], QColor]]
+    def set_center_crop(
+        self,
+        enabled: Optional[bool] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        shape: Optional[str] = None,
+        opacity: Optional[float] = None,
+        center_dot: Optional[bool] = None,
+        center_x: Optional[float] = None,
+        center_y: Optional[float] = None,
+        calibrating: Optional[bool] = None,
     ) -> None:
+        """Set the centered crop preview mask drawn over the image.
+
+        Dimensions are in original image pixels. This is a view overlay only;
+        it does not mutate image data or annotations.
+        """
+        if self._orig_image_bgr is not None:
+            img_h, img_w = self._orig_image_bgr.shape[:2]
+            self._ensure_center_crop_defaults(img_w, img_h)
+        else:
+            img_w = img_h = None
+
+        if enabled is not None:
+            self._center_crop_enabled = bool(enabled)
+        if shape is not None:
+            self._center_crop_shape = (
+                shape if shape in ("rectangle", "circle") else "rectangle"
+            )
+        if width is not None:
+            self._center_crop_width = max(1, int(width))
+        if height is not None:
+            self._center_crop_height = max(1, int(height))
+        if opacity is not None:
+            self._center_crop_opacity = max(0.0, min(1.0, float(opacity)))
+        if center_dot is not None:
+            self._center_crop_dot_visible = bool(center_dot)
+        if center_x is not None and img_w is not None:
+            self._center_crop_center_x = max(0.0, min(float(center_x), float(img_w)))
+        if center_y is not None and img_h is not None:
+            self._center_crop_center_y = max(0.0, min(float(center_y), float(img_h)))
+        if calibrating is not None:
+            self._center_crop_calibrating = bool(calibrating)
+            self._dragging_center_crop = False
+            if self._center_crop_calibrating:
+                self.setCursor(Qt.SizeAllCursor)
+            elif self.current_tool is None:
+                self.setCursor(Qt.ArrowCursor)
+        self.update()
+        self.centerCropChanged.emit(self.center_crop_settings())
+
+    def center_crop_settings(self) -> dict:
+        """Return the current center crop preview settings."""
+        return {
+            "enabled": self._center_crop_enabled,
+            "shape": self._center_crop_shape,
+            "width": self._center_crop_width,
+            "height": self._center_crop_height,
+            "opacity": self._center_crop_opacity,
+            "center_dot": self._center_crop_dot_visible,
+            "center_x": self._center_crop_center_x,
+            "center_y": self._center_crop_center_y,
+            "calibrating": self._center_crop_calibrating,
+        }
+
+    def _ensure_center_crop_defaults(self, img_w: int, img_h: int) -> None:
+        if self._center_crop_width is None:
+            self._center_crop_width = 1210
+        else:
+            self._center_crop_width = max(1, self._center_crop_width)
+        if self._center_crop_height is None:
+            self._center_crop_height = 1210
+        else:
+            self._center_crop_height = max(1, self._center_crop_height)
+        if self._center_crop_center_x is None:
+            self._center_crop_center_x = img_w / 2.0
+        else:
+            self._center_crop_center_x = max(
+                0.0, min(float(self._center_crop_center_x), float(img_w))
+            )
+        if self._center_crop_center_y is None:
+            self._center_crop_center_y = img_h / 2.0
+        else:
+            self._center_crop_center_y = max(
+                0.0, min(float(self._center_crop_center_y), float(img_h))
+            )
+
+    def _move_center_crop_to_view(self, pos_view: QPointF) -> None:
+        if self._orig_image_bgr is None:
+            return
+        img_h, img_w = self._orig_image_bgr.shape[:2]
+        x, y = self.display_to_original(self.view_to_display(pos_view))
+        self._center_crop_center_x = max(0.0, min(float(x), float(img_w)))
+        self._center_crop_center_y = max(0.0, min(float(y), float(img_h)))
+        self.update()
+        self.centerCropChanged.emit(self.center_crop_settings())
+
+    def set_overlays(self, poly_list: list) -> None:
         """Replace all rendered overlay polygons.
 
         Converts each polygon from original image coordinates to display
         (base-scaled) coordinates and triggers a repaint.
 
         Args:
-            poly_list (List[Tuple[List[Tuple[float, float]], QColor]]): List of
-                ``(points, color)`` pairs where *points* is a list of
-                ``(x, y)`` tuples in original image coordinates.
+            poly_list: List of ``(points, color, thickness[, visible])`` tuples
+                where *points* is a list of ``(x, y)`` tuples in original image
+                coordinates. Hidden overlays keep their index but are not drawn
+                or hit-tested.
         """
         self._overlays = []
-        for pts_orig, color, thick in poly_list:
+        for item in poly_list:
+            pts_orig, color, thick = item[:3]
+            visible = bool(item[3]) if len(item) > 3 else True
             disp_pts = [
                 QPointF(x * self._base_scale, y * self._base_scale)
                 for (x, y) in pts_orig
             ]
-            self._overlays.append((disp_pts, color, thick))
+            self._overlays.append((disp_pts, color, thick, visible))
 
         n = len(self._overlays)
-        if self.selected_polygon_idx >= n:
+        selected_hidden = (
+            0 <= self.selected_polygon_idx < n
+            and not self._overlays[self.selected_polygon_idx][3]
+        )
+        if self.selected_polygon_idx >= n or selected_hidden:
             logger.debug(
-                "selected_polygon_idx %d out of range after overlay update (new size %d) — resetting",
+                "selected_polygon_idx %d unavailable after overlay update "
+                "(new size %d) — resetting",
                 self.selected_polygon_idx,
                 n,
             )
@@ -379,6 +526,18 @@ class ImageLabel(QLabel):
             ]
             self._sam_ghost = (disp_pts, confidence)
         self.update()
+
+    def set_calibration_model(self, model) -> None:
+        """Bind a CalibrationModel so the canvas can render the grid and dots."""
+        self._calib_model = model
+        if model is not None:
+            model.calibration_changed.connect(self.update)
+            model.grid_changed.connect(self.update)
+            model.measurement_updated.connect(self.update)
+
+    def set_watermark_bar_y(self, y: int) -> None:
+        """Tell the canvas where the floating action bar's top edge sits (canvas coords)."""
+        self._watermark_bar_y = y
 
     def clear_sam_ghost(self) -> None:
         """Discard the SAM ghost polygon, bbox, and repaint."""
@@ -465,7 +624,9 @@ class ImageLabel(QLabel):
         best_dist = threshold
         best_poly = -1
         best_vert = -1
-        for poly_i, (pts, _, _) in enumerate(self._overlays):
+        for poly_i, (pts, _, _, visible) in enumerate(self._overlays):
+            if not visible:
+                continue
             for vert_i, p_disp in enumerate(pts):
                 p_view = QPointF(
                     p_disp.x() * self._zoom + self._pan.x(),
@@ -510,6 +671,15 @@ class ImageLabel(QLabel):
                 return
             if event.key() == Qt.Key_Escape:
                 self.clear_sam_ghost()
+                self.set_tool(None)
+                self.toolCanceled.emit()
+                return
+
+        if self.current_tool in (CALIBRATE, MEASURE):
+            if event.key() == Qt.Key_Escape:
+                self._pending_calib_pts = []
+                if self._calib_model is not None:
+                    self._calib_model.clear_measurement()
                 self.set_tool(None)
                 self.toolCanceled.emit()
                 return
@@ -566,7 +736,48 @@ class ImageLabel(QLabel):
                 ):  # handler cleared the tool (e.g. no class)
                     return
 
+            # --- Calibrate tool ---
+            if self.current_tool == CALIBRATE:
+                pos_view = QPointF(event.pos())
+                pos_disp = self.view_to_display(pos_view)
+                orig_pt = self.display_to_original(pos_disp)
+                self._pending_calib_pts.append(orig_pt)
+                self.update()
+                if len(self._pending_calib_pts) == 2:
+                    p1, p2 = self._pending_calib_pts
+                    # Don't clear here — keep pts visible while the dialog is open.
+                    # window.py clears them via canvas.set_tool(None) after dialog closes.
+                    self.calibrationPointsPlaced.emit(p1, p2)
+                return
+
+            # --- Measure tool ---
+            if self.current_tool == MEASURE:
+                if self._calib_model is None or not self._calib_model.has_scale():
+                    return
+                pos_view = QPointF(event.pos())
+                pos_disp = self.view_to_display(pos_view)
+                orig_pt = self.display_to_original(pos_disp)
+                p1, p2 = self._calib_model.meas_points()
+                if p1 is None:
+                    self._calib_model.set_meas_p1(orig_pt)
+                elif p2 is None:
+                    self._calib_model.set_meas_p2(orig_pt)
+                else:
+                    # Start a new measurement
+                    self._calib_model.set_meas_p1(orig_pt)
+                return
+
             pos_view = QPointF(event.pos())
+
+            if (
+                self._center_crop_calibrating
+                and self._center_crop_enabled
+                and self.current_tool is None
+            ):
+                self._dragging_center_crop = True
+                self._move_center_crop_to_view(pos_view)
+                event.accept()
+                return
 
             # --- SAM bbox tool: start rubber-band on press ---
             if self.current_tool == SAM_BBOX:
@@ -580,7 +791,9 @@ class ImageLabel(QLabel):
 
             # --- PRE-CHECK: Identify if we clicked inside any existing polygon ---
             found_idx = -1
-            for i, (pts, _, _) in enumerate(reversed(self._overlays)):
+            for i, (pts, _, _, visible) in enumerate(reversed(self._overlays)):
+                if not visible:
+                    continue
                 if QPolygonF(pts).containsPoint(pos_disp, Qt.OddEvenFill):
                     found_idx = len(self._overlays) - 1 - i
                     break
@@ -638,6 +851,7 @@ class ImageLabel(QLabel):
 
             if found_idx != -1:
                 self._dragging_polygon = True
+                self._polygon_drag_moved = False
                 self._last_mouse_pos = pos_view
 
         elif event.button() == Qt.RightButton:
@@ -652,6 +866,11 @@ class ImageLabel(QLabel):
         """
         self._mouse_pos = QPointF(event.pos())
 
+        if self._dragging_center_crop:
+            self._move_center_crop_to_view(self._mouse_pos)
+            event.accept()
+            return
+
         # --- SAM bbox rubber-band update ---
         if self.current_tool == SAM_BBOX and self._sam_bbox_start is not None:
             self._sam_bbox_end = self.view_to_display(self._mouse_pos)
@@ -661,7 +880,7 @@ class ImageLabel(QLabel):
         # --- Drag vertex ---
         if self._dragging_vertex_idx != -1:
             new_pos = self.view_to_display(self._mouse_pos)
-            pts, _, _ = self._overlays[self._dragging_vertex_poly]
+            pts, _, _, _ = self._overlays[self._dragging_vertex_poly]
             pts[self._dragging_vertex_idx] = new_pos
             self.update()
             return
@@ -677,12 +896,13 @@ class ImageLabel(QLabel):
                 delta_view.x() / self._zoom, delta_view.y() / self._zoom
             )
 
-            pts, _, _ = self._overlays[self.selected_polygon_idx]
+            pts, _, _, _ = self._overlays[self.selected_polygon_idx]
             for i in range(len(pts)):
                 pts[i] = QPointF(
                     pts[i].x() + delta_disp.x(), pts[i].y() + delta_disp.y()
                 )
 
+            self._polygon_drag_moved = True
             self._last_mouse_pos = self._mouse_pos
             self.update()
             return
@@ -690,6 +910,7 @@ class ImageLabel(QLabel):
         if self._panning and self._last_mouse_pos is not None:
             delta = self._mouse_pos - self._last_mouse_pos
             self._pan += delta
+            self._view_is_fit = False
             self._last_mouse_pos = self._mouse_pos
             self.update()
             return
@@ -702,7 +923,9 @@ class ImageLabel(QLabel):
             self.update()
             return
 
-        if self.current_tool is None and self._overlays:
+        if self._center_crop_calibrating and self.current_tool is None:
+            self.setCursor(Qt.SizeAllCursor)
+        elif self.current_tool is None and self._overlays:
             poly_i, _ = self._find_nearest_vertex(self._mouse_pos)
             self.setCursor(Qt.CrossCursor if poly_i != -1 else Qt.ArrowCursor)
 
@@ -718,6 +941,11 @@ class ImageLabel(QLabel):
             event (QMouseEvent): The mouse release event.
         """
         if event.button() == Qt.LeftButton:
+            if self._dragging_center_crop:
+                self._dragging_center_crop = False
+                event.accept()
+                return
+
             # --- SAM bbox complete: clear rubber-band and emit original-coords bbox ---
             if self.current_tool == SAM_BBOX and self._sam_bbox_start is not None:
                 end = self.view_to_display(QPointF(event.pos()))
@@ -737,7 +965,7 @@ class ImageLabel(QLabel):
 
             if self._dragging_vertex_idx != -1:
                 poly_i = self._dragging_vertex_poly
-                pts, _, _ = self._overlays[poly_i]
+                pts, _, _, _ = self._overlays[poly_i]
                 pts_orig = [self.display_to_original(p) for p in pts]
                 self._dragging_vertex_idx = -1
                 self._dragging_vertex_poly = -1
@@ -745,12 +973,15 @@ class ImageLabel(QLabel):
                 return
 
             if self._dragging_polygon:
-                idx = self.selected_polygon_idx
-                pts, _, _ = self._overlays[idx]
-                pts_orig = [self.display_to_original(p) for p in pts]
+                moved = self._polygon_drag_moved
                 self._dragging_polygon = False
+                self._polygon_drag_moved = False
                 self._last_mouse_pos = None
-                self.polygonEdited.emit(idx, pts_orig)
+                if moved:
+                    idx = self.selected_polygon_idx
+                    pts, _, _, _ = self._overlays[idx]
+                    pts_orig = [self.display_to_original(p) for p in pts]
+                    self.polygonEdited.emit(idx, pts_orig)
                 return
 
         if event.button() == Qt.RightButton:
@@ -782,6 +1013,7 @@ class ImageLabel(QLabel):
 
         old_zoom = self._zoom
         self._zoom = max(0.2, min(8.0, old_zoom * factor))
+        self._view_is_fit = False
         self.zoom_changed.emit(self._zoom)
 
         self._pan = QPointF(
@@ -799,9 +1031,9 @@ class ImageLabel(QLabel):
         self._apply_zoom(1 / 1.15)
 
     def reset_view(self) -> None:
-        """Reset zoom to ``1.0`` and pan to the origin, then repaint."""
-        self._zoom = 1.0
-        self._pan = QPointF(0, 0)
+        """Fit the image into the current viewport and center it."""
+        self._fit_image_to_view()
+        self._view_is_fit = True
         self.zoom_changed.emit(self._zoom)
         self.update()
 
@@ -822,6 +1054,7 @@ class ImageLabel(QLabel):
         point_in_disp = self.view_to_display(center)
 
         self._zoom = max(0.2, min(8.0, self._zoom * factor))
+        self._view_is_fit = False
         self.zoom_changed.emit(self._zoom)
 
         self._pan = QPointF(
@@ -829,6 +1062,202 @@ class ImageLabel(QLabel):
             center.y() - point_in_disp.y() * self._zoom,
         )
         self.update()
+
+    def _fit_image_to_view(self) -> None:
+        """Set zoom/pan so the full display pixmap is centered in the widget."""
+        if self._display_qpix is None:
+            self._zoom = 1.0
+            self._pan = QPointF(0, 0)
+            return
+
+        pix_w = max(1, self._display_qpix.width())
+        pix_h = max(1, self._display_qpix.height())
+        view_w = max(1, self.width())
+        view_h = max(1, self.height())
+
+        self._zoom = min(view_w / pix_w, view_h / pix_h)
+        self._pan = QPointF(
+            (view_w - pix_w * self._zoom) / 2.0,
+            (view_h - pix_h * self._zoom) / 2.0,
+        )
+
+    def resizeEvent(self, event) -> None:
+        """Keep an already reset/newly loaded image fitted as the viewport changes."""
+        super().resizeEvent(event)
+        if self._view_is_fit and self._display_qpix is not None:
+            self._fit_image_to_view()
+            self.zoom_changed.emit(self._zoom)
+            self.update()
+
+    # ------------------------------------------------------------------ #
+    # Calibration rendering helpers
+    # ------------------------------------------------------------------ #
+
+    def _paint_grid(self, painter: QPainter) -> None:
+        """Draw grid lines fixed to the viewport in screen coordinates."""
+        m = self._calib_model
+        if m is None or not m.grid_visible() or not m.has_scale():
+            return
+        step_world = m.grid_spacing_world()
+        if step_world <= 0:
+            return
+        step_screen = (step_world / m.scale()) * self._base_scale * self._zoom
+        if step_screen < 8:
+            return
+
+        r, g, b = m.grid_color()
+        alpha = int(m.grid_opacity() * 255)
+        color = QColor(r, g, b, alpha)
+        painter.setPen(QPen(color, 1.0))
+        painter.setBrush(Qt.NoBrush)
+
+        w = float(self.width())
+        h = float(self.height())
+
+        x = 0.0
+        while x <= w:
+            painter.drawLine(QPointF(x, 0), QPointF(x, h))
+            x += step_screen
+
+        y = 0.0
+        while y <= h:
+            painter.drawLine(QPointF(0, y), QPointF(w, y))
+            y += step_screen
+
+        self._paint_grid_watermark(
+            painter, step_world, m.px_count(), m.world_val(), m.unit(), w, h
+        )
+
+    def _paint_grid_watermark(
+        self,
+        painter: QPainter,
+        step_world: float,
+        px_count: float,
+        world_val: float,
+        unit: str,
+        viewport_w: float,
+        viewport_h: float,
+    ) -> None:
+        line1 = f"{px_count:g}px:{world_val:g}{unit}"
+        line2 = f"Grid: {step_world:g} {unit}"
+        font = painter.font()
+        font.setPointSizeF(11.0)
+        painter.setFont(font)
+        fm = QFontMetricsF(font)
+        margin = 12.0
+        line_h = fm.height()
+
+        w1 = fm.horizontalAdvance(line1)
+        w2 = fm.horizontalAdvance(line2)
+
+        if self._watermark_bar_y is not None:
+            top_y = float(self._watermark_bar_y)
+        else:
+            top_y = viewport_h - 2 * line_h - margin
+
+        baseline1 = top_y + fm.ascent()
+        baseline2 = baseline1 + line_h
+
+        x1 = viewport_w - w1 - margin
+        x2 = viewport_w - w2 - margin
+
+        painter.setPen(QColor(0, 0, 0, 120))
+        painter.drawText(QPointF(x1 + 1, baseline1 + 1), line1)
+        painter.drawText(QPointF(x2 + 1, baseline2 + 1), line2)
+        painter.setPen(QColor(255, 255, 255, 200))
+        painter.drawText(QPointF(x1, baseline1), line1)
+        painter.drawText(QPointF(x2, baseline2), line2)
+
+    def _paint_calib_dots(self, painter: QPainter) -> None:
+        """Draw calibration and measure dots in display coords (inside scaled painter)."""
+        m = self._calib_model
+
+        # Pending calibration clicks (local state, not yet in model)
+        dot_color = QColor(255, 107, 107)
+        r = 6.0 / self._zoom
+        QPen(dot_color, 1.5 / self._zoom)
+        QPen(dot_color)
+        f = painter.font()
+        f.setPointSizeF(max(7.0, 9.0 / self._zoom))
+        painter.setFont(f)
+
+        pts_to_draw = []
+        for i, (ox, oy) in enumerate(self._pending_calib_pts):
+            pts_to_draw.append((ox, oy, str(i + 1), dot_color))
+
+        for ox, oy, label, color in pts_to_draw:
+            cx = ox * self._base_scale
+            cy = oy * self._base_scale
+            painter.setPen(QPen(color, 1.5 / self._zoom))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(QPointF(cx, cy), r, r)
+            painter.drawEllipse(QPointF(cx, cy), 1.5 / self._zoom, 1.5 / self._zoom)
+            painter.setPen(QPen(color))
+            painter.drawText(QPointF(cx + r + 2.0 / self._zoom, cy - r), label)
+
+        if len(pts_to_draw) == 2:
+            p1d = QPointF(
+                pts_to_draw[0][0] * self._base_scale,
+                pts_to_draw[0][1] * self._base_scale,
+            )
+            p2d = QPointF(
+                pts_to_draw[1][0] * self._base_scale,
+                pts_to_draw[1][1] * self._base_scale,
+            )
+            dash_pen = QPen(dot_color, 1.5 / self._zoom, Qt.DashLine)
+            dash_pen.setDashPattern([6, 4])
+            painter.setPen(dash_pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawLine(p1d, p2d)
+
+        # Measure points
+        if m is None:
+            return
+        meas_color = QColor(255, 216, 102)
+        mp1, mp2 = m.meas_points()
+        meas_pts = []
+        if mp1:
+            meas_pts.append((mp1[0], mp1[1]))
+        if mp2:
+            meas_pts.append((mp2[0], mp2[1]))
+
+        for ox, oy in meas_pts:
+            cx = ox * self._base_scale
+            cy = oy * self._base_scale
+            painter.setPen(QPen(meas_color, 1.5 / self._zoom))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(QPointF(cx, cy), r, r)
+            painter.drawEllipse(QPointF(cx, cy), 1.5 / self._zoom, 1.5 / self._zoom)
+
+        if len(meas_pts) == 2:
+            p1d = QPointF(
+                meas_pts[0][0] * self._base_scale, meas_pts[0][1] * self._base_scale
+            )
+            p2d = QPointF(
+                meas_pts[1][0] * self._base_scale, meas_pts[1][1] * self._base_scale
+            )
+            painter.setPen(QPen(meas_color, 1.5 / self._zoom))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawLine(p1d, p2d)
+            dist = m.measured_distance()
+            if dist is not None:
+                mx = (p1d.x() + p2d.x()) / 2
+                my = (p1d.y() + p2d.y()) / 2 - 10.0 / self._zoom
+                f2 = painter.font()
+                f2.setPointSizeF(max(8.0, 10.0 / self._zoom))
+                f2.setBold(True)
+                painter.setFont(f2)
+                painter.setPen(QPen(meas_color))
+                painter.drawText(QPointF(mx, my), f"{dist:.1f} {m.unit()}")
+        elif len(meas_pts) == 1 and self.current_tool == MEASURE and self._mouse_pos:
+            p1d = QPointF(
+                meas_pts[0][0] * self._base_scale, meas_pts[0][1] * self._base_scale
+            )
+            cursor_disp = self.view_to_display(self._mouse_pos)
+            dash_pen = QPen(meas_color, 1.0 / self._zoom, Qt.DashLine)
+            dash_pen.setDashPattern([4, 4])
+            painter.setPen(dash_pen)
+            painter.drawLine(p1d, cursor_disp)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         """Paint the image, annotation overlays, and the in-progress polygon.
@@ -853,6 +1282,8 @@ class ImageLabel(QLabel):
             painter.drawPixmap(0, 0, self._heatmap_pix)
             painter.setOpacity(1.0)
 
+        self._paint_center_crop(painter)
+
         # Draw SAM bounding-box rubber-band while the user is dragging
         if (
             self.current_tool == SAM_BBOX
@@ -873,8 +1304,8 @@ class ImageLabel(QLabel):
             painter.drawRect(QRectF(x1, y1, x2 - x1, y2 - y1))
 
         # Draw Overlays with Selection Highlighting
-        for i, (pts, color, thick) in enumerate(self._overlays):
-            if len(pts) >= 2:
+        for i, (pts, color, thick, visible) in enumerate(self._overlays):
+            if visible and len(pts) >= 2:
                 is_selected = i == self.selected_polygon_idx
                 screen_thick = ((thick * 2.0) if is_selected else thick) / self._zoom
                 pen = QPen(color, screen_thick)
@@ -886,7 +1317,8 @@ class ImageLabel(QLabel):
                 )
                 painter.drawPolygon(QPolygonF(pts + [pts[0]]))
 
-                r = 4.0 / self._zoom
+                screen_r = max(1.75, min(4.0, self._zoom * 2.0))
+                r = screen_r / self._zoom
                 painter.setBrush(QBrush(color))
                 painter.setPen(QPen(QColor(20, 20, 20), 1.0 / self._zoom))
                 for p in pts:
@@ -948,3 +1380,110 @@ class ImageLabel(QLabel):
                 painter.setBrush(QBrush(self._active_color))
                 painter.setPen(outline_pen)
                 painter.drawEllipse(pt, r, r)
+
+        self._paint_calib_dots(painter)
+
+        # Switch to screen coordinates for the viewport-fixed grid
+        painter.resetTransform()
+        self._paint_grid(painter)
+
+    def _paint_center_crop(self, painter: QPainter) -> None:
+        """Dim everything outside the configured center crop preview."""
+        if (
+            not self._center_crop_enabled
+            or self._display_qpix is None
+            or self._orig_image_bgr is None
+        ):
+            return
+        img_h, img_w = self._orig_image_bgr.shape[:2]
+        self._ensure_center_crop_defaults(img_w, img_h)
+        crop_w = self._center_crop_width or img_w
+        crop_h = self._center_crop_height or img_h
+        if self._center_crop_shape == "circle":
+            diameter = min(crop_w, crop_h)
+            crop_w = crop_h = diameter
+
+        center_x = (
+            self._center_crop_center_x
+            if self._center_crop_center_x is not None
+            else img_w / 2.0
+        )
+        center_y = (
+            self._center_crop_center_y
+            if self._center_crop_center_y is not None
+            else img_h / 2.0
+        )
+        x = (center_x - crop_w / 2.0) * self._base_scale
+        y = (center_y - crop_h / 2.0) * self._base_scale
+        w = crop_w * self._base_scale
+        h = crop_h * self._base_scale
+        crop_rect = QRectF(x, y, w, h)
+        image_rect = QRectF(
+            0, 0, self._display_qpix.width(), self._display_qpix.height()
+        )
+
+        outside = QPainterPath()
+        outside.setFillRule(Qt.OddEvenFill)
+        outside.addRect(image_rect)
+        if self._center_crop_shape == "circle":
+            outside.addEllipse(crop_rect)
+        else:
+            outside.addRect(crop_rect)
+
+        painter.save()
+        painter.fillPath(outside, QColor(0, 0, 0, int(self._center_crop_opacity * 255)))
+        pen = QPen(QColor(255, 255, 255), 1.5 / self._zoom, Qt.SolidLine)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        if self._center_crop_shape == "circle":
+            painter.drawEllipse(crop_rect)
+            if self._center_crop_calibrating:
+                self._paint_center_calibration_grid(painter, crop_rect)
+        else:
+            painter.drawRect(crop_rect)
+        if self._center_crop_dot_visible:
+            cx = center_x * self._base_scale
+            cy = center_y * self._base_scale
+            radius = 4.0 / self._zoom
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(255, 0, 0, 170)))
+            painter.drawEllipse(QPointF(cx, cy), radius, radius)
+        painter.restore()
+
+    def _paint_center_calibration_grid(
+        self, painter: QPainter, crop_rect: QRectF
+    ) -> None:
+        """Draw a reference grid clipped to the active circular center crop."""
+        diameter_px = crop_rect.width() / max(self._base_scale, 0.0001)
+        divisions = max(4, min(16, int(round(diameter_px / 150.0))))
+        if divisions <= 1:
+            return
+
+        clip_path = QPainterPath()
+        clip_path.addEllipse(crop_rect)
+        painter.save()
+        painter.setClipPath(clip_path)
+
+        spacing_x = crop_rect.width() / divisions
+        spacing_y = crop_rect.height() / divisions
+        center_index = divisions / 2.0
+
+        for i in range(1, divisions):
+            is_center_line = abs(i - center_index) < 0.001
+            alpha = 150 if is_center_line else 85
+            width = (1.25 if is_center_line else 0.75) / self._zoom
+            pen = QPen(QColor(255, 255, 255, alpha), width, Qt.SolidLine)
+            painter.setPen(pen)
+
+            x = crop_rect.left() + i * spacing_x
+            y = crop_rect.top() + i * spacing_y
+            painter.drawLine(
+                QPointF(x, crop_rect.top()),
+                QPointF(x, crop_rect.bottom()),
+            )
+            painter.drawLine(
+                QPointF(crop_rect.left(), y),
+                QPointF(crop_rect.right(), y),
+            )
+
+        painter.restore()

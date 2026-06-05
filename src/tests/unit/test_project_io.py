@@ -4,9 +4,10 @@ import numpy as np
 from pathlib import Path
 
 from core.persistence.project_io import ProjectIO
+from core.states.calibration_state import CalibrationState
 from core.states.dataset_state import DatasetState
+from core.states.center_template_state import CenterTemplateState
 from core.states.inference_state import InferenceState
-from core.states.validation_state import ValidationState
 
 
 # ------------------------------------------------------------------ #
@@ -27,11 +28,6 @@ def dataset_state():
 @pytest.fixture
 def inference_state():
     return InferenceState()
-
-
-@pytest.fixture
-def validation_state():
-    return ValidationState()
 
 
 def _make_dataset(tmp_path):
@@ -165,7 +161,7 @@ class TestCocoRoundTrip:
         ds_dst = DatasetState()
         pio.import_coco(coco_path, ds_dst)
 
-        assert "Defect" in ds_dst.class_names
+        assert "defect" in ds_dst.class_names
         assert "img001.jpg" in ds_dst.annotations
         poly = ds_dst.annotations["img001.jpg"][0]["polygon"]
         assert len(poly) == 3
@@ -179,8 +175,8 @@ class TestCocoRoundTrip:
         ds_dst.add_class("Existing", (0, 255, 0))
         pio.import_coco(coco_path, ds_dst)
 
-        assert "Existing" in ds_dst.class_names
-        assert "Defect" in ds_dst.class_names
+        assert "existing" in ds_dst.class_names
+        assert "defect" in ds_dst.class_names
 
 
 # ------------------------------------------------------------------ #
@@ -191,12 +187,10 @@ class TestCocoRoundTrip:
 class TestProjectRoundTrip:
     def test_save_creates_required_files(self, pio, tmp_path):
         ds = _make_dataset(tmp_path)
-        vs = ValidationState()
-        vs.poly_path = "/some/path"
         inf = InferenceState()
 
         proj_dir = str(tmp_path / "proj")
-        pio.save_project(proj_dir, "myproject", ds, vs, inf)
+        pio.save_project(proj_dir, "myproject", ds, inf)
 
         assert (tmp_path / "proj" / "myproject.annoproj").exists()
         assert (tmp_path / "proj" / "annotations.coco.json").exists()
@@ -204,31 +198,27 @@ class TestProjectRoundTrip:
     def test_round_trip_restores_class_names(self, pio, tmp_path):
         ds = _make_dataset(tmp_path)
         proj_dir = str(tmp_path / "proj")
-        path = pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), InferenceState()
-        )
+        path = pio.save_project(proj_dir, "myproject", ds, InferenceState())
 
         data = pio.load_project(path)
         ds2 = DatasetState()
         ds2.image_dir = ds.image_dir
         ds2.image_files = list(ds.image_files)
-        pio.apply_project_to_states(data, ds2, ValidationState(), InferenceState())
+        pio.apply_project_to_states(data, ds2, InferenceState())
 
-        assert "Defect" in ds2.class_names
-        assert ds2.class_colors["Defect"] == (255, 0, 0)
+        assert "defect" in ds2.class_names
+        assert ds2.class_colors["defect"] == (255, 0, 0)
 
     def test_round_trip_restores_annotations(self, pio, tmp_path):
         ds = _make_dataset(tmp_path)
         proj_dir = str(tmp_path / "proj")
-        path = pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), InferenceState()
-        )
+        path = pio.save_project(proj_dir, "myproject", ds, InferenceState())
 
         data = pio.load_project(path)
         ds2 = DatasetState()
         ds2.image_dir = ds.image_dir
         ds2.image_files = list(ds.image_files)
-        pio.apply_project_to_states(data, ds2, ValidationState(), InferenceState())
+        pio.apply_project_to_states(data, ds2, InferenceState())
 
         assert "img001.jpg" in ds2.annotations
         assert len(ds2.annotations["img001.jpg"]) == 1
@@ -236,64 +226,50 @@ class TestProjectRoundTrip:
     def test_round_trip_restores_inspector_and_note(self, pio, tmp_path):
         ds = _make_dataset(tmp_path)
         proj_dir = str(tmp_path / "proj")
-        path = pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), InferenceState()
-        )
+        path = pio.save_project(proj_dir, "myproject", ds, InferenceState())
 
         data = pio.load_project(path)
         ds2 = DatasetState()
         ds2.image_dir = ds.image_dir
         ds2.image_files = list(ds.image_files)
-        vs2 = ValidationState()
-        pio.apply_project_to_states(data, ds2, vs2, InferenceState())
+        pio.apply_project_to_states(data, ds2, InferenceState())
 
         assert ds2.inspectors.get("img001.jpg") == "Alice"
         assert ds2.notes.get("img001.jpg") == "test note"
 
-    def test_round_trip_restores_validation_paths(self, pio, tmp_path):
-        ds = _make_dataset(tmp_path)
-        vs = ValidationState()
-        vs.poly_path = "/poly"
-        vs.json_path = "/ann.json"
-        proj_dir = str(tmp_path / "proj")
-        path = pio.save_project(proj_dir, "myproject", ds, vs, InferenceState())
-
-        data = pio.load_project(path)
-        vs2 = ValidationState()
-        pio.apply_project_to_states(data, DatasetState(), vs2, InferenceState())
-
-        assert vs2.poly_path == "/poly"
-        assert vs2.json_path == "/ann.json"
-
     def test_round_trip_restores_inference_cache(self, pio, tmp_path):
         ds = _make_dataset(tmp_path)
+        abs_img = str(tmp_path / "images" / "img001.jpg")
         inf = InferenceState()
-        inf.inference_cache = {"img001.jpg": 0.87}
+        inf.scores = {abs_img: 0.87}
+        inf.labels = {abs_img: "ANOMALY"}
+        inf.inference_cache = {abs_img: 0.87}
         proj_dir = str(tmp_path / "proj")
-        path = pio.save_project(proj_dir, "myproject", ds, ValidationState(), inf)
+        path = pio.save_project(proj_dir, "myproject", ds, inf)
 
         data = pio.load_project(path)
         inf2 = InferenceState()
-        pio.apply_project_to_states(data, DatasetState(), ValidationState(), inf2)
+        pio.apply_project_to_states(data, DatasetState(), inf2)
 
-        assert inf2.inference_cache.get("img001.jpg") == pytest.approx(0.87)
+        assert inf2.scores.get(abs_img) == pytest.approx(0.87)
+        assert inf2.labels.get(abs_img) == "ANOMALY"
+        assert inf2.inference_cache.get(abs_img) == pytest.approx(0.87)
 
     def test_score_maps_saved_and_restored(self, pio, tmp_path):
         ds = _make_dataset(tmp_path)
         inf = InferenceState()
         arr = np.array([[0.1, 0.9], [0.5, 0.3]], dtype=np.float32)
         inf.score_maps["img001.jpg"] = arr
+        inf.score_maps_dirty = True
         inf.inference_cache["img001.jpg"] = float(arr.max())
 
         proj_dir = str(tmp_path / "proj")
-        path = pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), inf, save_score_maps=True
-        )
+        path = pio.save_project(proj_dir, "myproject", ds, inf, save_score_maps=True)
         assert (tmp_path / "proj" / "scoremaps.npz").exists()
 
         data = pio.load_project(path)
         inf2 = InferenceState()
-        pio.apply_project_to_states(data, DatasetState(), ValidationState(), inf2)
+        pio.apply_project_to_states(data, DatasetState(), inf2)
 
         assert "img001.jpg" in inf2.score_maps
         np.testing.assert_array_almost_equal(inf2.score_maps["img001.jpg"], arr)
@@ -302,20 +278,17 @@ class TestProjectRoundTrip:
         ds = _make_dataset(tmp_path)
         inf = InferenceState()
         inf.score_maps["img001.jpg"] = np.zeros((4, 4), dtype=np.float32)
+        inf.score_maps_dirty = True
 
         proj_dir = str(tmp_path / "proj")
-        pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), inf, save_score_maps=False
-        )
+        pio.save_project(proj_dir, "myproject", ds, inf, save_score_maps=False)
 
         assert not (tmp_path / "proj" / "scoremaps.npz").exists()
 
     def test_missing_coco_file_does_not_crash(self, pio, tmp_path):
         ds = _make_dataset(tmp_path)
         proj_dir = str(tmp_path / "proj")
-        path = pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), InferenceState()
-        )
+        path = pio.save_project(proj_dir, "myproject", ds, InferenceState())
 
         # Remove the COCO file to simulate a corrupted/moved project
         (tmp_path / "proj" / "annotations.coco.json").unlink()
@@ -325,15 +298,13 @@ class TestProjectRoundTrip:
         ds2.image_dir = ds.image_dir
         ds2.image_files = list(ds.image_files)
         # Should not raise — annotations simply remain empty
-        pio.apply_project_to_states(data, ds2, ValidationState(), InferenceState())
+        pio.apply_project_to_states(data, ds2, InferenceState())
         assert ds2.annotations == {}
 
     def test_relative_path_resolution(self, pio, tmp_path):
         ds = _make_dataset(tmp_path)
         proj_dir = str(tmp_path / "proj")
-        path = pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), InferenceState()
-        )
+        path = pio.save_project(proj_dir, "myproject", ds, InferenceState())
 
         # Manually strip the absolute key to force relative-path fallback
         data = pio.load_project(path)
@@ -347,9 +318,7 @@ class TestProjectRoundTrip:
         proj_dir = str(tmp_path / "proj")
 
         # 1. Capture the returned path
-        path = pio.save_project(
-            proj_dir, "myproject", ds, ValidationState(), InferenceState()
-        )
+        path = pio.save_project(proj_dir, "myproject", ds, InferenceState())
 
         # 2. Use the returned path to read the file!
         # (Wrapping in Path() just in case pio.save_project returns a string instead of a pathlib.Path object)
@@ -358,3 +327,264 @@ class TestProjectRoundTrip:
         assert raw["version"] == ProjectIO.SCHEMA_VERSION
         assert "created_at" in raw
         assert "modified_at" in raw
+
+    def test_calibration_pixel_defaults_round_trip(self, pio, tmp_path):
+        ds = _make_dataset(tmp_path)
+        proj_dir = tmp_path / "proj"
+        state = CalibrationState()
+
+        path = pio.save_project(
+            str(proj_dir),
+            "myproject",
+            ds,
+            InferenceState(),
+            calibration_state=state,
+        )
+
+        data = pio.load_project(path)
+        restored = CalibrationState()
+        pio.apply_project_to_states(
+            data,
+            DatasetState(),
+            InferenceState(),
+            calibration_state=restored,
+        )
+
+        assert restored.scale == pytest.approx(1.0)
+        assert restored.unit == "px"
+        assert restored.user_calibrated is False
+        assert restored.grid_visible is True
+
+    def test_legacy_calibration_without_mode_loads_as_user_calibrated(self, pio):
+        restored = CalibrationState()
+
+        pio.apply_project_to_states(
+            {"calibration": {"scale": 0.05, "unit": "mm"}},
+            DatasetState(),
+            InferenceState(),
+            calibration_state=restored,
+        )
+
+        assert restored.scale == pytest.approx(0.05)
+        assert restored.unit == "mm"
+        assert restored.user_calibrated is True
+
+    def test_missing_calibration_loads_as_pixel_default(self, pio):
+        restored = CalibrationState()
+        restored.scale = 0.05
+        restored.unit = "mm"
+        restored.user_calibrated = True
+
+        pio.apply_project_to_states(
+            {},
+            DatasetState(),
+            InferenceState(),
+            calibration_state=restored,
+        )
+
+        assert restored.scale == pytest.approx(1.0)
+        assert restored.unit == "px"
+        assert restored.user_calibrated is False
+        assert restored.grid_visible is True
+
+    def test_center_template_metadata_round_trips(self, pio, tmp_path):
+        ds = _make_dataset(tmp_path)
+        proj_dir = tmp_path / "proj"
+        proj_dir.mkdir()
+        template = proj_dir / "center_template.png"
+        template.write_bytes(b"not a real image")
+
+        state = CenterTemplateState()
+        state.enabled = True
+        state.template_file = "center_template.png"
+        state.template_path = str(template)
+        state.anchor_x = 12
+        state.anchor_y = 14
+        state.crop_shape = "circle"
+        state.crop_width = 1210
+        state.crop_height = 1210
+        state.center_x = 50.0
+        state.center_y = 60.0
+
+        path = pio.save_project(
+            str(proj_dir),
+            "myproject",
+            ds,
+            InferenceState(),
+            center_template_state=state,
+        )
+
+        data = pio.load_project(path)
+        restored = CenterTemplateState()
+        pio.apply_project_to_states(
+            data,
+            DatasetState(),
+            InferenceState(),
+            center_template_state=restored,
+        )
+
+        assert restored.enabled is True
+        assert restored.template_file == "center_template.png"
+        assert restored.template_path == str(template)
+        assert restored.anchor_x == 12
+        assert restored.anchor_y == 14
+        assert restored.center_x == 50.0
+        assert restored.center_y == 60.0
+
+    def test_missing_center_template_disables_matching(self, pio, tmp_path):
+        ds = _make_dataset(tmp_path)
+        proj_dir = tmp_path / "proj"
+        state = CenterTemplateState()
+        state.enabled = True
+        state.template_file = "center_template.png"
+        state.template_path = str(proj_dir / "center_template.png")
+
+        path = pio.save_project(
+            str(proj_dir),
+            "myproject",
+            ds,
+            InferenceState(),
+            center_template_state=state,
+        )
+
+        data = pio.load_project(path)
+        restored = CenterTemplateState()
+        pio.apply_project_to_states(
+            data,
+            DatasetState(),
+            InferenceState(),
+            center_template_state=restored,
+        )
+
+        assert restored.enabled is False
+        assert restored.template_file == "center_template.png"
+
+    # ------------------------------------------------------------------ #
+    # per_image format
+    # ------------------------------------------------------------------ #
+
+    def test_per_image_replaces_old_keys(self, pio, tmp_path):
+        ds = _make_dataset(tmp_path)
+        abs_img = str(tmp_path / "images" / "img001.jpg")
+        inf = InferenceState()
+        inf.scores = {abs_img: 0.75}
+        inf.labels = {abs_img: "ANOMALY"}
+
+        proj_dir = str(tmp_path / "proj")
+        path = pio.save_project(proj_dir, "myproject", ds, inf)
+
+        raw = json.loads(Path(path).read_text())
+        assert "per_image" in raw
+        assert "review_status" not in raw
+        assert "review_decisions" not in raw
+        assert "score_cache" not in raw.get("inference", {})
+        assert "label_cache" not in raw.get("inference", {})
+
+    def test_per_image_uses_basename_keys(self, pio, tmp_path):
+        ds = _make_dataset(tmp_path)
+        abs_img = str(tmp_path / "images" / "img001.jpg")
+        inf = InferenceState()
+        inf.scores = {abs_img: 0.5}
+        inf.labels = {abs_img: "NORMAL"}
+
+        proj_dir = str(tmp_path / "proj")
+        path = pio.save_project(proj_dir, "myproject", ds, inf)
+
+        raw = json.loads(Path(path).read_text())
+        assert "img001.jpg" in raw["per_image"]
+        assert all(not key.startswith("/") for key in raw["per_image"]), (
+            "per_image keys must be basenames, not absolute paths"
+        )
+
+    def test_per_image_round_trip_review_decision(self, pio, tmp_path):
+        ds = _make_dataset(tmp_path)
+        ds.review_decisions["img001.jpg"] = "reject"
+
+        proj_dir = str(tmp_path / "proj")
+        path = pio.save_project(proj_dir, "myproject", ds, InferenceState())
+
+        data = pio.load_project(path)
+        ds2 = DatasetState()
+        ds2.image_dir = ds.image_dir
+        ds2.image_files = list(ds.image_files)
+        pio.apply_project_to_states(data, ds2, InferenceState())
+
+        assert ds2.review_decisions.get("img001.jpg") == "reject"
+
+    def test_per_image_all_fields_round_trip(self, pio, tmp_path):
+        ds = _make_dataset(tmp_path)
+        ds.review_decisions["img001.jpg"] = "accept"
+        abs_img = str(tmp_path / "images" / "img001.jpg")
+        inf = InferenceState()
+        inf.scores = {abs_img: 0.42}
+        inf.labels = {abs_img: "NORMAL"}
+
+        proj_dir = str(tmp_path / "proj")
+        path = pio.save_project(proj_dir, "myproject", ds, inf)
+
+        data = pio.load_project(path)
+        ds2 = DatasetState()
+        inf2 = InferenceState()
+        pio.apply_project_to_states(data, ds2, inf2)
+
+        assert ds2.inspectors.get("img001.jpg") == "Alice"
+        assert ds2.notes.get("img001.jpg") == "test note"
+        assert ds2.review_decisions.get("img001.jpg") == "accept"
+        assert inf2.scores.get(abs_img) == pytest.approx(0.42)
+        assert inf2.labels.get(abs_img) == "NORMAL"
+
+    def test_legacy_format_loads_review_status_and_decisions(self, pio, tmp_path):
+        legacy_data = {
+            "dataset": {"image_dir": str(tmp_path / "images")},
+            "review_status": {"img001.jpg": {"inspector": "Bob", "note": "looks fine"}},
+            "review_decisions": {"img001.jpg": "accept"},
+        }
+
+        ds2 = DatasetState()
+        inf2 = InferenceState()
+        pio.apply_project_to_states(legacy_data, ds2, inf2)
+
+        assert ds2.inspectors.get("img001.jpg") == "Bob"
+        assert ds2.notes.get("img001.jpg") == "looks fine"
+        assert ds2.review_decisions.get("img001.jpg") == "accept"
+
+    def test_legacy_format_loads_absolute_cache_keys(self, pio, tmp_path):
+        abs_img = str(tmp_path / "images" / "img001.jpg")
+        legacy_data = {
+            "dataset": {"image_dir": str(tmp_path / "images")},
+            "inference": {
+                "score_cache": {abs_img: 0.9},
+                "label_cache": {abs_img: "ANOMALY"},
+            },
+        }
+
+        inf2 = InferenceState()
+        pio.apply_project_to_states(legacy_data, DatasetState(), inf2)
+
+        assert inf2.scores.get(abs_img) == pytest.approx(0.9)
+        assert inf2.labels.get(abs_img) == "ANOMALY"
+
+    def test_as_relative_path_with_traversal(self, pio, tmp_path):
+        base = str(tmp_path / "project" / "subdir")
+        sibling = str(tmp_path / "project" / "model.pt")
+        result = pio._as_relative_path(sibling, base)
+        assert result == "../model.pt"
+
+    def test_image_dir_outside_project_becomes_relative(self, pio, tmp_path):
+        img_dir = tmp_path / "images"
+        img_dir.mkdir()
+        from PIL import Image as PILImage
+
+        PILImage.new("RGB", (10, 10)).save(img_dir / "img001.jpg")
+
+        ds = DatasetState()
+        ds.image_dir = str(img_dir)
+        ds.image_files = ["img001.jpg"]
+
+        proj_dir = str(tmp_path / "myproject")
+        path = pio.save_project(proj_dir, "myproject", ds, InferenceState())
+
+        raw = json.loads(Path(path).read_text())
+        saved_dir = raw["dataset"]["image_dir"]
+        assert not saved_dir.startswith("/"), "image_dir should be relative"
+        assert saved_dir == "../images"

@@ -9,6 +9,7 @@ so callers can inspect data before applying it.
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -47,11 +48,12 @@ class ProjectIO:
         project_dir: str,
         project_name: str,
         dataset_state,
-        validation_state,
         inference_state,
         created_at: Optional[str] = None,
         save_score_maps: bool = True,
         model_path: str = "",
+        calibration_state=None,
+        center_template_state=None,
     ) -> str:
         """Write .annoproj + annotations.coco.json to project_dir.
 
@@ -63,12 +65,13 @@ class ProjectIO:
             project_dir: Directory that will contain all project files.
             project_name: Human-readable project name (used as filename stem).
             dataset_state: DatasetState instance.
-            validation_state: ValidationState instance.
             inference_state: InferenceState instance.
             created_at: ISO timestamp from the original save; if None, uses now.
             save_score_maps: When True, write inference score maps to NPZ.
             model_path: Absolute path to the inference model file (informational).
         """
+        _t0 = time.perf_counter()
+
         project_dir = str(Path(project_dir).resolve())
         os.makedirs(project_dir, exist_ok=True)
 
@@ -77,10 +80,17 @@ class ProjectIO:
             created_at = now
 
         coco_path = os.path.join(project_dir, _COCO_FILENAME)
+        _t1 = time.perf_counter()
         self.export_coco(coco_path, dataset_state)
+        _t2 = time.perf_counter()
+        logger.info("save_project [export_coco]:      %.3fs", _t2 - _t1)
 
         score_maps_file = ""
-        if save_score_maps and inference_state.score_maps:
+        if (
+            save_score_maps
+            and inference_state.score_maps
+            and inference_state.score_maps_dirty
+        ):
             npz_path = os.path.join(project_dir, _SCOREMAPS_FILENAME)
             try:
                 np.savez_compressed(
@@ -91,15 +101,52 @@ class ProjectIO:
                     },
                 )
                 score_maps_file = _SCOREMAPS_FILENAME
+                inference_state.score_maps_dirty = False
             except Exception as exc:
                 logger.warning("Could not save score maps: %s", exc)
+        elif inference_state.score_maps:
+            score_maps_file = _SCOREMAPS_FILENAME
+        _t3 = time.perf_counter()
+        logger.info(
+            "save_project [score_maps npz]:   %.3fs (dirty=%s)",
+            _t3 - _t2,
+            inference_state.score_maps_dirty,
+        )
 
-        review_status = {}
-        for fname in dataset_state.image_files:
+        scores_by_fname = {
+            os.path.basename(k): v for k, v in inference_state.scores.items()
+        }
+        labels_by_fname = {
+            os.path.basename(k): v for k, v in inference_state.labels.items()
+        }
+        per_image = {}
+        all_fnames = (
+            set(dataset_state.image_files) | set(scores_by_fname) | set(labels_by_fname)
+        )
+        for fname in all_fnames:
+            entry = {}
+            score = scores_by_fname.get(fname)
+            label = labels_by_fname.get(fname)
+            decision = dataset_state.review_decisions.get(fname, "")
+            decision_at = dataset_state.decision_timestamps.get(fname, "")
             inspector = dataset_state.inspectors.get(fname, "")
             note = dataset_state.notes.get(fname, "")
-            if inspector or note:
-                review_status[fname] = {"inspector": inspector, "note": note}
+            if score is not None:
+                entry["score"] = score
+            if label is not None:
+                entry["label"] = label
+            if decision:
+                entry["decision"] = decision
+            if decision_at:
+                entry["decision_at"] = decision_at
+            if inspector:
+                entry["inspector"] = inspector
+            if note:
+                entry["note"] = note
+            if entry:
+                per_image[fname] = entry
+        _t4 = time.perf_counter()
+        logger.info("save_project [build per_image]:  %.3fs", _t4 - _t3)
 
         proj = {
             "version": _SCHEMA_VERSION,
@@ -107,7 +154,7 @@ class ProjectIO:
             "modified_at": now,
             "project_name": project_name,
             "dataset": {
-                "image_dir": self._make_relative_if_inside(
+                "image_dir": self._as_relative_path(
                     dataset_state.image_dir or "", project_dir
                 ),
                 "class_names": list(dataset_state.class_names),
@@ -116,30 +163,67 @@ class ProjectIO:
                 },
             },
             "annotations_file": _COCO_FILENAME,
-            "validation": {
-                "poly_path": validation_state.poly_path,
-                "json_path": validation_state.json_path,
-                "mask_out_path": validation_state.mask_out_path,
-                "gt_path": validation_state.gt_path,
-                "pred_path": validation_state.pred_path,
-                "eval_out_path": validation_state.eval_out_path,
-            },
-            "review_status": review_status,
-            "review_decisions": {
-                fname: dataset_state.review_decisions[fname]
-                for fname in dataset_state.image_files
-                if fname in dataset_state.review_decisions
-            },
+            "per_image": per_image,
             "inference": {
-                "score_cache": dict(inference_state.inference_cache),
+                "model_path": self._as_relative_path(model_path, project_dir),
                 "score_maps_file": score_maps_file,
-                "model_path": self._make_relative_if_inside(model_path, project_dir),
             },
         }
 
+        if calibration_state is not None:
+            cs = calibration_state
+            proj["calibration"] = {
+                "scale": cs.scale,
+                "unit": cs.unit,
+                "px_count": cs.px_count,
+                "world_val": cs.world_val,
+                "user_calibrated": cs.user_calibrated,
+                "calib_p1": list(cs.calib_p1) if cs.calib_p1 else None,
+                "calib_p2": list(cs.calib_p2) if cs.calib_p2 else None,
+                "real_distance": cs.real_distance,
+                "grid_visible": cs.grid_visible,
+                "grid_color": list(cs.grid_color),
+                "grid_opacity": cs.grid_opacity,
+                "grid_spacing_world": cs.grid_spacing_world,
+                "grid_spacing_auto": cs.grid_spacing_auto,
+            }
+
+        if center_template_state is not None:
+            ts = center_template_state
+            proj["center_template"] = {
+                "enabled": ts.enabled,
+                "template_file": self._as_relative_path(
+                    ts.template_path or ts.template_file, project_dir
+                ),
+                "anchor_x": ts.anchor_x,
+                "anchor_y": ts.anchor_y,
+                "crop_shape": ts.crop_shape,
+                "crop_width": ts.crop_width,
+                "crop_height": ts.crop_height,
+                "center_x": ts.center_x,
+                "center_y": ts.center_y,
+            }
+            logger.debug(
+                "Project center template saved: enabled=%s file=%s "
+                "anchor=(%s, %s) crop=%s %sx%s center=(%s, %s)",
+                ts.enabled,
+                proj["center_template"]["template_file"],
+                ts.anchor_x,
+                ts.anchor_y,
+                ts.crop_shape,
+                ts.crop_width,
+                ts.crop_height,
+                ts.center_x,
+                ts.center_y,
+            )
+
         annoproj_path = os.path.join(project_dir, f"{project_name}.annoproj")
+        _t5 = time.perf_counter()
         with open(annoproj_path, "w", encoding="utf-8") as f:
             json.dump(proj, f, indent=2)
+        _t6 = time.perf_counter()
+        logger.info("save_project [write annoproj]:   %.3fs", _t6 - _t5)
+        logger.info("save_project [total]:            %.3fs", _t6 - _t0)
 
         logger.debug("Project saved to: %s", annoproj_path)
         return annoproj_path
@@ -177,6 +261,11 @@ class ProjectIO:
             inf_data["model_path"] = self._resolve_path(
                 inf_data["model_path"], proj_dir
             )
+        tmpl_data = data.get("center_template", {})
+        if "template_file" in tmpl_data:
+            tmpl_data["_resolved_template_path"] = self._resolve_path(
+                tmpl_data.get("template_file", ""), proj_dir
+            )
 
         data["resolved_coco_path"] = self._resolve_coco_path(annoproj_path, data)
 
@@ -194,16 +283,17 @@ class ProjectIO:
         self,
         project_data: dict,
         dataset_state,
-        validation_state,
         inference_state,
+        calibration_state=None,
+        center_template_state=None,
     ) -> None:
-        """Mutate the three state objects from load_project() output.
+        """Mutate state objects from load_project() output.
 
         Does NOT touch image_dir or image_files — those must be set by the
         caller before invoking this method (e.g. via ProjectController which
         scans the directory first). This method repopulates annotations,
-        class registry, inspectors, notes, validation paths, and inference
-        cache on top of whatever image list is already in state.
+        class registry, inspectors, notes, and inference cache on top of
+        whatever image list is already in state.
 
         Args:
             project_data: Dict returned by load_project().
@@ -216,8 +306,8 @@ class ProjectIO:
         # Class registry
         class_names = ds.get("class_names", [])
         if class_names:
-            dataset_state.class_names = list(class_names)
-            raw_colors = ds.get("class_colors", {})
+            dataset_state.class_names = [n.lower() for n in class_names]
+            raw_colors = {k.lower(): v for k, v in ds.get("class_colors", {}).items()}
             dataset_state.class_colors = {}
             for i, name in enumerate(dataset_state.class_names):
                 raw = raw_colors.get(name)
@@ -231,6 +321,11 @@ class ProjectIO:
                     dataset_state.class_colors[name] = DEFAULT_CLASS_COLORS[
                         i % len(DEFAULT_CLASS_COLORS)
                     ]
+            dataset_state.class_visibility = {
+                name: True for name in dataset_state.class_names
+            }
+        else:
+            dataset_state.reset_classes()
 
         # Annotations from COCO file
         coco_path = project_data.get("resolved_coco_path", "")
@@ -240,27 +335,39 @@ class ProjectIO:
             except Exception as exc:
                 logger.warning("Could not load COCO annotations: %s", exc)
 
-        # Review status (inspector / note)
-        for fname, info in project_data.get("review_status", {}).items():
-            dataset_state.inspectors[fname] = info.get("inspector", "")
-            dataset_state.notes[fname] = info.get("note", "")
+        image_dir = project_data.get("dataset", {}).get("image_dir", "")
 
-        # Image-level review decisions
-        for fname, decision in project_data.get("review_decisions", {}).items():
-            dataset_state.review_decisions[fname] = decision
+        if "per_image" in project_data:
+            for fname, info in project_data["per_image"].items():
+                abs_path = os.path.join(image_dir, fname) if image_dir else fname
+                score = info.get("score")
+                label = info.get("label")
+                if score is not None:
+                    inference_state.scores[abs_path] = score
+                if label is not None:
+                    inference_state.labels[abs_path] = label
+                if info.get("decision"):
+                    dataset_state.review_decisions[fname] = info["decision"]
+                if info.get("decision_at"):
+                    dataset_state.decision_timestamps[fname] = info["decision_at"]
+                dataset_state.inspectors[fname] = info.get("inspector", "")
+                dataset_state.notes[fname] = info.get("note", "")
+        else:
+            # Legacy format: separate review_status, review_decisions, score_cache, label_cache
+            for fname, info in project_data.get("review_status", {}).items():
+                dataset_state.inspectors[fname] = info.get("inspector", "")
+                dataset_state.notes[fname] = info.get("note", "")
+            for fname, decision in project_data.get("review_decisions", {}).items():
+                dataset_state.review_decisions[fname] = decision
+            inf_data = project_data.get("inference", {})
+            for k, v in inf_data.get("score_cache", {}).items():
+                abs_k = k if os.path.isabs(k) else os.path.join(image_dir, k)
+                inference_state.scores[abs_k] = v
+            for k, v in inf_data.get("label_cache", {}).items():
+                abs_k = k if os.path.isabs(k) else os.path.join(image_dir, k)
+                inference_state.labels[abs_k] = v
 
-        # Validation paths
-        vdata = project_data.get("validation", {})
-        validation_state.poly_path = vdata.get("poly_path", "")
-        validation_state.json_path = vdata.get("json_path", "")
-        validation_state.mask_out_path = vdata.get("mask_out_path", "")
-        validation_state.gt_path = vdata.get("gt_path", "")
-        validation_state.pred_path = vdata.get("pred_path", "")
-        validation_state.eval_out_path = vdata.get("eval_out_path", "")
-
-        # Inference cache (float scores only — fast to restore)
-        inf_data = project_data.get("inference", {})
-        inference_state.inference_cache = dict(inf_data.get("score_cache", {}))
+        inference_state.inference_cache = dict(inference_state.scores)
 
         # Score maps from NPZ (optional)
         npz_path = project_data.get("_resolved_npz_path", "")
@@ -270,8 +377,84 @@ class ProjectIO:
                 for key in npz.files:
                     fname = self._npz_key_to_filename(key)
                     inference_state.score_maps[fname] = npz[key]
+                inference_state.score_maps_dirty = False
             except Exception as exc:
                 logger.warning("Could not load score maps from NPZ: %s", exc)
+
+        # Calibration (optional — absent in old project files)
+        if calibration_state is not None:
+            cdata = project_data.get("calibration", {})
+            using_default_pixel_scale = not cdata
+            if not cdata:
+                calibration_state.clear_calibration()
+            else:
+                scale = cdata.get("scale", None)
+                using_default_pixel_scale = scale is None
+                if scale is None:
+                    calibration_state.clear_calibration()
+                else:
+                    calibration_state.scale = scale
+                    calibration_state.unit = cdata.get("unit", "mm")
+                    calibration_state.px_count = cdata.get("px_count", 1.0)
+                    calibration_state.world_val = cdata.get("world_val", scale)
+                    calibration_state.user_calibrated = cdata.get(
+                        "user_calibrated", True
+                    )
+            p1 = cdata.get("calib_p1")
+            calibration_state.calib_p1 = (
+                tuple(p1) if p1 and not using_default_pixel_scale else None
+            )
+            p2 = cdata.get("calib_p2")
+            calibration_state.calib_p2 = (
+                tuple(p2) if p2 and not using_default_pixel_scale else None
+            )
+            calibration_state.real_distance = cdata.get("real_distance", 1.0)
+            calibration_state.grid_visible = (
+                True if using_default_pixel_scale else cdata.get("grid_visible", True)
+            )
+            color = cdata.get("grid_color", [58, 90, 122])
+            calibration_state.grid_color = tuple(color)
+            calibration_state.grid_opacity = cdata.get("grid_opacity", 0.5)
+            calibration_state.grid_spacing_world = (
+                100.0
+                if using_default_pixel_scale
+                else cdata.get("grid_spacing_world", 100.0)
+            )
+            calibration_state.grid_spacing_auto = cdata.get("grid_spacing_auto", True)
+
+        if center_template_state is not None:
+            tdata = project_data.get("center_template", {})
+            resolved_template_path = tdata.get("_resolved_template_path", "")
+            template_exists = bool(
+                resolved_template_path and os.path.exists(resolved_template_path)
+            )
+            center_template_state.enabled = bool(tdata.get("enabled", False))
+            center_template_state.template_file = tdata.get("template_file", "")
+            center_template_state.template_path = resolved_template_path
+            center_template_state.anchor_x = int(tdata.get("anchor_x", 0))
+            center_template_state.anchor_y = int(tdata.get("anchor_y", 0))
+            center_template_state.crop_shape = tdata.get("crop_shape", "circle")
+            center_template_state.crop_width = int(tdata.get("crop_width", 1210))
+            center_template_state.crop_height = int(tdata.get("crop_height", 1210))
+            center_template_state.center_x = tdata.get("center_x", None)
+            center_template_state.center_y = tdata.get("center_y", None)
+            center_template_state.last_score = None
+            if center_template_state.template_file and not template_exists:
+                center_template_state.enabled = False
+            logger.debug(
+                "Project center template loaded: enabled=%s file=%s exists=%s "
+                "anchor=(%s, %s) crop=%s %sx%s center=(%s, %s)",
+                center_template_state.enabled,
+                center_template_state.template_file,
+                template_exists,
+                center_template_state.anchor_x,
+                center_template_state.anchor_y,
+                center_template_state.crop_shape,
+                center_template_state.crop_width,
+                center_template_state.crop_height,
+                center_template_state.center_x,
+                center_template_state.center_y,
+            )
 
     # ------------------------------------------------------------------ #
     # COCO export / import
@@ -309,12 +492,16 @@ class ProjectIO:
 
         ann_id = 1
         for img_id, fname in enumerate(dataset_state.image_files, start=1):
-            img_path = (
-                os.path.join(dataset_state.image_dir, fname)
-                if dataset_state.image_dir
-                else fname
-            )
-            w, h = self._read_image_size(img_path)
+            if fname in dataset_state.image_sizes:
+                w, h = dataset_state.image_sizes[fname]
+            else:
+                img_path = (
+                    os.path.join(dataset_state.image_dir, fname)
+                    if dataset_state.image_dir
+                    else fname
+                )
+                w, h = self._read_image_size(img_path)
+                dataset_state.image_sizes[fname] = (w, h)
             coco["images"].append(
                 {"id": img_id, "file_name": fname, "width": w, "height": h}
             )
@@ -335,9 +522,20 @@ class ProjectIO:
                 )
                 ann_id += 1
 
+        _cache_hits = sum(
+            1 for f in dataset_state.image_files if f in dataset_state.image_sizes
+        )
+        logger.info(
+            "export_coco: %d images, %d size-cache hits, %d PIL reads",
+            len(dataset_state.image_files),
+            _cache_hits,
+            len(dataset_state.image_files) - _cache_hits,
+        )
+        _tw = time.perf_counter()
         os.makedirs(str(Path(coco_path).parent), exist_ok=True)
         with open(coco_path, "w", encoding="utf-8") as f:
             json.dump(coco, f, indent=2)
+        logger.info("export_coco [json write]:        %.3fs", time.perf_counter() - _tw)
 
         logger.debug("COCO JSON written to: %s (%d annotations)", coco_path, ann_id - 1)
 
@@ -357,7 +555,7 @@ class ProjectIO:
 
         cat_map = {}
         for c in data.get("categories", []):
-            name = c["name"]
+            name = c["name"].lower()
             cat_map[c["id"]] = name
             if name not in dataset_state.class_names:
                 idx = len(dataset_state.class_names)
@@ -365,8 +563,14 @@ class ProjectIO:
                 dataset_state.class_colors[name] = DEFAULT_CLASS_COLORS[
                     idx % len(DEFAULT_CLASS_COLORS)
                 ]
+                dataset_state.class_visibility[name] = True
 
-        img_id_map = {img["id"]: img["file_name"] for img in data.get("images", [])}
+        img_id_map = {}
+        for img in data.get("images", []):
+            img_id_map[img["id"]] = img["file_name"]
+            w, h = img.get("width", 0), img.get("height", 0)
+            if w and h:
+                dataset_state.image_sizes[img["file_name"]] = (w, h)
 
         for ann in data.get("annotations", []):
             img_id = ann["image_id"]
@@ -438,9 +642,7 @@ class ProjectIO:
     def _filename_to_npz_key(self, fname: str) -> str:
         """Sanitize a filename to a valid NPZ array key."""
         return (
-            fname.replace(".", "__dot__")
-            .replace("/", "__slash__")
-            .replace("\\", "__bslash__")
+            fname.replace("\\", "/").replace(".", "__dot__").replace("/", "__slash__")
         )
 
     def _npz_key_to_filename(self, key: str) -> str:
@@ -451,12 +653,11 @@ class ProjectIO:
             .replace("__dot__", ".")
         )
 
-    def _make_relative_if_inside(self, path: str, base_dir: str) -> str:
-        """Return path relative to base_dir if it lives inside it, else unchanged."""
+    def _as_relative_path(self, path: str, base_dir: str) -> str:
         if not path:
             return path
         try:
-            return str(Path(path).relative_to(base_dir))
+            return Path(os.path.relpath(path, base_dir)).as_posix()
         except ValueError:
             return path
 

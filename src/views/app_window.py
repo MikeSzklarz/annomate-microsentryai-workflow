@@ -5,6 +5,7 @@ See MVC.md § Architecture Rules for the full layer contract.
 
 import os
 
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import (
     QMainWindow,
     QInputDialog,
@@ -13,10 +14,11 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QAction, QKeySequence
 
-from views.validation.window import ValidationWindow
 from views.annomate.window import AnnoMateWindow
 
 _APP_TITLE = "AnnoMate & MicroSentryAI"
+_LAST_IMAGE_DIR_KEY = "recent/last_image_dir"
+_LAST_PROJECT_KEY = "recent/last_project"
 
 
 class AppWindow(QMainWindow):
@@ -29,10 +31,8 @@ class AppWindow(QMainWindow):
     Args:
         dataset_model: DatasetTableModel instance.
         inference_model: InferenceModel instance.
-        validation_model: ValidationModel instance.
         io_controller: IOController instance.
         inference_controller: InferenceController instance.
-        validation_controller: ValidationController instance.
         project_controller: ProjectController instance.
     """
 
@@ -40,11 +40,12 @@ class AppWindow(QMainWindow):
         self,
         dataset_model,
         inference_model,
-        validation_model,
         io_controller,
         inference_controller,
-        validation_controller,
         project_controller,
+        calibration_model=None,
+        center_template_model=None,
+        center_template_controller=None,
     ) -> None:
         super().__init__()
         self.setWindowTitle(_APP_TITLE)
@@ -52,24 +53,42 @@ class AppWindow(QMainWindow):
 
         self.dataset_model = dataset_model
         self.inference_model = inference_model
-        self.validation_model = validation_model
         self.io_controller = io_controller
         self.inference_controller = inference_controller
-        self.validation_controller = validation_controller
         self.project_controller = project_controller
+        self.calibration_model = calibration_model
+        self.center_template_model = center_template_model
+        self.center_template_controller = center_template_controller
+        self._settings = QSettings("LANL", "AnnoMateMicroSentryAI")
 
         # Sub-views
-        self.validation_view = ValidationWindow(validation_model, validation_controller)
-        self.validation_view.setWindowTitle("Validation")
-        self.validation_view.resize(900, 650)
         self.annomate_view = AnnoMateWindow(
-            dataset_model, io_controller, inference_model, inference_controller
+            dataset_model,
+            io_controller,
+            inference_model,
+            inference_controller,
+            calibration_model=calibration_model,
+            center_template_model=center_template_model,
+            center_template_controller=center_template_controller,
+            project_controller=project_controller,
         )
+
+        self.annomate_view.new_project_requested.connect(self._new_project)
+        self.annomate_view.open_project_requested.connect(self._open_project)
+        self.annomate_view.open_image_folder_requested.connect(self._open_image_folder)
+        self.annomate_view.open_recent_project_requested.connect(
+            self._open_recent_project
+        )
+        self.annomate_view.open_recent_image_folder_requested.connect(
+            self._open_recent_image_folder
+        )
+        self._refresh_project_start_state()
 
         self.setCentralWidget(self.annomate_view)
 
         # React to ProjectController signals
         self.project_controller.dirty_changed.connect(self._update_title)
+        self.project_controller.project_opened.connect(lambda _: self._update_title())
         self.project_controller.project_saved.connect(
             lambda path: self.statusBar().showMessage(f"Saved: {path}", 4000)
         )
@@ -108,41 +127,44 @@ class AppWindow(QMainWindow):
         add(file_menu, "Exit", "Ctrl+Q", self.close)
 
         data_menu = self.menuBar().addMenu("&Data")
-        add(data_menu, "Import JSON Data…", "", self._import_coco)
+        add(
+            data_menu,
+            "Import Annotation Classes…",
+            "",
+            self._import_annotation_classes,
+        )
         data_menu.addSeparator()
-        add(data_menu, "Export Polygons + Data…", "", self._export_polygons)
+        add(
+            data_menu,
+            "Export Annotation Classes",
+            "",
+            self._export_annotation_classes,
+        )
         add(data_menu, "Export Binary Masks…", "", self._export_binary_masks)
         add(data_menu, "Export CSV…", "", self._export_csv)
+        add(data_menu, "Export Train Structure…", "", self._export_train_structure)
 
-        validation_menu = self.menuBar().addMenu("&Validation")
-        add(validation_menu, "Open Validation…", "", self._open_validation)
-
-        view_menu = self.menuBar().addMenu("&Microsentry")
-        self._ms_action = QAction("Enable MicroSentryAI", self)
-        self._ms_action.setCheckable(True)
-        self._ms_action.setToolTip("Toggle MicroSentryAI heatmap and segmentation")
-        self._ms_action.toggled.connect(self.annomate_view._on_microsentry_toggled)
-        view_menu.addAction(self._ms_action)
-
-    # ================================================================== #
-    # Project slots
-    # ================================================================== #
-
-    def _new_project(self) -> None:
-        if self.project_controller.is_dirty and not self._confirm_discard():
-            return
-        self.project_controller.new_project()
-
-    def _open_project(self) -> None:
-        if self.project_controller.is_dirty and not self._confirm_discard():
-            return
-
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open Project", os.getcwd(), "AnnoMate Project (*.annoproj)"
+    def _refresh_project_start_state(self) -> None:
+        """Refresh recent-action shortcuts on the empty project start screen."""
+        self.annomate_view.set_project_start_state(
+            self._last_project(), self._last_image_dir()
         )
-        if not path:
-            return
 
+    def _remember_recent_project(self, path: str) -> None:
+        if path:
+            self._settings.setValue(_LAST_PROJECT_KEY, path)
+
+    def _remember_recent_image_dir(self, path: str) -> None:
+        if path:
+            self._settings.setValue(_LAST_IMAGE_DIR_KEY, path)
+
+    def _last_project(self) -> str:
+        return self._settings.value(_LAST_PROJECT_KEY, "", type=str) or ""
+
+    def _last_image_dir(self) -> str:
+        return self._settings.value(_LAST_IMAGE_DIR_KEY, "", type=str) or ""
+
+    def _open_project_path(self, path: str) -> None:
         try:
             project_data, warnings = self.project_controller.open_project(path)
         except Exception as exc:
@@ -162,6 +184,62 @@ class AppWindow(QMainWindow):
                 8000,
             )
 
+        self._remember_recent_project(path)
+        image_dir = project_data.get("dataset", {}).get("image_dir", "")
+        if image_dir:
+            self._remember_recent_image_dir(image_dir)
+        self._refresh_project_start_state()
+
+    def _open_recent_project(self, path: str) -> None:
+        if self.project_controller.is_dirty and not self._confirm_discard():
+            return
+        if not os.path.exists(path):
+            self._settings.remove(_LAST_PROJECT_KEY)
+            self._refresh_project_start_state()
+            QMessageBox.warning(
+                self,
+                "Open Project",
+                f"Recent project no longer exists:\n{path}",
+            )
+            return
+        self._open_project_path(path)
+
+    def _open_recent_image_folder(self, directory: str) -> None:
+        if not os.path.isdir(directory):
+            self._settings.remove(_LAST_IMAGE_DIR_KEY)
+            self._refresh_project_start_state()
+            QMessageBox.warning(
+                self,
+                "Open Image Folder",
+                f"Recent image folder no longer exists:\n{directory}",
+            )
+            return
+        self.io_controller.load_folder(directory)
+        self._remember_recent_image_dir(directory)
+        self._refresh_project_start_state()
+
+    # ================================================================== #
+    # Project slots
+    # ================================================================== #
+
+    def _new_project(self) -> None:
+        if self.project_controller.is_dirty and not self._confirm_discard():
+            return
+        self.project_controller.new_project()
+        self._refresh_project_start_state()
+
+    def _open_project(self) -> None:
+        if self.project_controller.is_dirty and not self._confirm_discard():
+            return
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Project", os.getcwd(), "AnnoMate Project (*.annoproj)"
+        )
+        if not path:
+            return
+
+        self._open_project_path(path)
+
     def _save_project(self) -> None:
         if not self.project_controller.has_project:
             self._save_project_as()
@@ -169,16 +247,16 @@ class AppWindow(QMainWindow):
         self._check_orphans_then_save(self.project_controller.save_project)
 
     def _save_project_as(self) -> None:
-        parent_dir = QFileDialog.getExistingDirectory(
+        project_dir = QFileDialog.getExistingDirectory(
             self, "Choose Project Folder", os.getcwd()
         )
-        if not parent_dir:
+        if not project_dir:
             return
 
         image_dir = self.dataset_model.get_image_dir()
         from pathlib import Path
 
-        default_name = Path(image_dir).name if image_dir else "project"
+        default_name = Path(image_dir).name if image_dir else Path(project_dir).name
 
         name, ok = QInputDialog.getText(
             self, "Project Name", "Enter project name:", text=default_name
@@ -186,10 +264,8 @@ class AppWindow(QMainWindow):
         if not ok or not name.strip():
             return
 
-        name = name.strip()
-        project_dir = os.path.join(parent_dir, name)
         self._check_orphans_then_save(
-            lambda: self.project_controller.save_project_as(project_dir, name)
+            lambda: self.project_controller.save_project_as(project_dir, name.strip())
         )
 
     def _check_orphans_then_save(self, save_fn) -> None:
@@ -206,9 +282,15 @@ class AppWindow(QMainWindow):
             if reply != QMessageBox.Ok:
                 return
         try:
-            save_fn()
+            saved_path = save_fn()
         except Exception as exc:
             QMessageBox.critical(self, "Save Project", f"Could not save:\n{exc}")
+            return
+        self._remember_recent_project(saved_path)
+        image_dir = self.dataset_model.get_image_dir()
+        if image_dir:
+            self._remember_recent_image_dir(image_dir)
+        self._refresh_project_start_state()
 
     def _open_image_folder(self) -> None:
         """Scan a folder for images and load them as the current dataset."""
@@ -228,6 +310,8 @@ class AppWindow(QMainWindow):
             return
         try:
             self.project_controller.relocate_images(new_dir)
+            self._remember_recent_image_dir(new_dir)
+            self._refresh_project_start_state()
         except Exception as exc:
             QMessageBox.critical(
                 self, "Relocate Images", f"Could not scan folder:\n{exc}"
@@ -251,51 +335,86 @@ class AppWindow(QMainWindow):
     # Data menu handlers
     # ================================================================== #
 
-    def _import_coco(self) -> None:
+    def _import_annotation_classes(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Import JSON Data", "", "JSON (*.json)"
+            self, "Import Annotation Classes", "", "Text Files (*.txt)"
         )
         if not path:
             return
         try:
-            self.io_controller.import_data_json(path)
+            msg = self.io_controller.import_annotation_classes(path)
+            QMessageBox.information(self, "Import Annotation Classes", msg)
         except Exception as exc:
-            QMessageBox.critical(self, "Import JSON Data", f"Import failed:\n{exc}")
+            QMessageBox.critical(
+                self, "Import Annotation Classes", f"Import failed:\n{exc}"
+            )
             return
 
-    def _export_polygons(self) -> None:
-        out_dir = QFileDialog.getExistingDirectory(
-            self, "Choose output folder", os.getcwd()
-        )
-        if not out_dir:
-            return
+    def _export_start_dir(self) -> str:
+        return self.project_controller.project_dir or os.getcwd()
+
+    def _export_annotation_classes(self) -> None:
+        if not self.project_controller.has_project:
+            self._save_project_as()
+            project_dir = self.project_controller.project_dir
+            if not project_dir or not os.path.isdir(project_dir):
+                return
+
         try:
-            msg = self.io_controller.export_polygons_and_data(out_dir)
-            QMessageBox.information(self, "Export", msg)
+            msg = self.io_controller.export_annotation_classes(
+                self.project_controller.project_dir
+            )
+            QMessageBox.information(self, "Export Annotation Classes", msg)
         except Exception as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
 
     def _export_binary_masks(self) -> None:
-        out_dir = QFileDialog.getExistingDirectory(
-            self, "Choose ground truth output folder", os.getcwd()
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose ground truth output folder", self._export_start_dir()
         )
-        if not out_dir:
+        if not chosen:
             return
         try:
-            msg = self.io_controller.export_binary_masks(out_dir)
+            msg = self.io_controller.export_binary_masks(
+                os.path.join(chosen, "binary_masks")
+            )
             QMessageBox.information(self, "Export Binary Masks", msg)
         except Exception as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
 
     def _export_csv(self) -> None:
         out_path, _ = QFileDialog.getSaveFileName(
-            self, "Save CSV", "metadata.csv", "CSV (*.csv)"
+            self,
+            "Save CSV",
+            os.path.join(self._export_start_dir(), "metadata.csv"),
+            "CSV (*.csv)",
         )
         if not out_path:
             return
         try:
             msg = self.io_controller.export_csv(out_path)
             QMessageBox.information(self, "Export", msg)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+
+    def _export_train_structure(self) -> None:
+        parent_dir = QFileDialog.getExistingDirectory(
+            self, "Choose Train Structure Output Folder", self._export_start_dir()
+        )
+        if not parent_dir:
+            return
+
+        default_name = self.project_controller.project_name or "dataset"
+        name, ok = QInputDialog.getText(
+            self, "Dataset Folder Name", "Enter dataset folder name:", text=default_name
+        )
+        if not ok or not name.strip():
+            return
+
+        out_dir = os.path.join(parent_dir, name.strip())
+        try:
+            msg = self.io_controller.export_train_structure(out_dir)
+            QMessageBox.information(self, "Export Train Structure", msg)
         except Exception as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
 
@@ -343,9 +462,8 @@ class AppWindow(QMainWindow):
                 event.ignore()
                 return
         self.project_controller.autosave_manager.stop()
+        if self.center_template_controller is not None:
+            self.center_template_controller.shutdown()
+        self.inference_controller.shutdown()
+        self.annomate_view.shutdown()
         super().closeEvent(event)
-
-    def _open_validation(self) -> None:
-        self.validation_view.show()
-        self.validation_view.raise_()
-        self.validation_view.activateWindow()

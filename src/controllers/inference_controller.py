@@ -37,15 +37,16 @@ class InferenceWorker(QThread):
         file_list (List[str]): Ordered list of absolute image paths to process.
 
     Signals:
-        resultReady (str, object): Emitted after each successful prediction as
-            ``(absolute_path, score_map)``.
+        resultReady (str, float, object): Emitted after each successful prediction
+            as ``(absolute_path, score, score_map)``.
         progress (int): Emitted after each image with the count processed so far.
         finished (): Emitted once the loop exits, regardless of outcome.
     """
 
-    resultReady = Signal(str, object)  # (absolute_path, score_map: np.ndarray)
+    resultReady = Signal(
+        str, float, object
+    )  # (absolute_path, score: float, score_map: np.ndarray)
     progress = Signal(int)  # count of images processed so far
-    finished = Signal()
 
     def __init__(self, strategy, file_list: List[str]) -> None:
         """Initialize InferenceWorker with a strategy and file list.
@@ -73,12 +74,11 @@ class InferenceWorker(QThread):
             if not self._running:
                 break
             try:
-                _, score_map = self.strategy.predict(path)
-                self.resultReady.emit(path, score_map)
+                score, score_map = self.strategy.predict(path)
+                self.resultReady.emit(path, score, score_map)
             except Exception as e:
                 logger.error("Inference failed for %s: %s", path, e)
             self.progress.emit(i + 1)
-        self.finished.emit()
 
     def stop(self) -> None:
         """Request cooperative cancellation of the inference loop.
@@ -101,14 +101,16 @@ class InferenceController(QObject):
         inference_model (InferenceModel): Model storing per-image score maps.
 
     Signals:
-        result_ready (str, object): Proxy for :attr:`InferenceWorker.resultReady`
-            — emitted as ``(absolute_path, score_map)``.
+        result_ready (str, float, object): Proxy for :attr:`InferenceWorker.resultReady`
+            — emitted as ``(absolute_path, score, score_map)``.
         progress (int): Proxy for :attr:`InferenceWorker.progress` — count of
             images processed so far.
         batch_done (): Emitted when the current batch finishes.
     """
 
-    result_ready = Signal(str, object)  # (path, score_map)
+    result_ready = Signal(
+        str, float, object
+    )  # (path, score: float, score_map: np.ndarray)
     progress = Signal(int)  # images processed so far
     batch_done = Signal()  # all images in a batch finished
 
@@ -229,6 +231,9 @@ class InferenceController(QObject):
         self._worker.finished.connect(self.batch_done)
         self._worker.start()
 
+    def shutdown(self) -> None:
+        self._stop_worker()
+
     def _stop_worker(self) -> None:
         """Gracefully stop and clean up the current inference worker.
 
@@ -302,14 +307,12 @@ class InferenceController(QObject):
 
         s = gaussian_filter(score_map, sigma=sigma) if sigma > 0 else score_map.copy()
 
+        # Suppress the background noise floor using the percentile slider, then
+        # keep the absolute [0, 1] scale intact. Re-normalizing per image (old
+        # behaviour) collapsed the distinction between NORMAL and ANOMALY images:
+        # both would fill the full colormap range regardless of actual severity.
         v_min_thr = np.percentile(s, heat_min_pct)
-        s_clipped = np.clip(s, v_min_thr, s.max())
-        mx, mn = s_clipped.max(), s_clipped.min()
-        s_norm = (
-            (s_clipped - mn) / (mx - mn + 1e-12)
-            if mx > mn
-            else np.zeros_like(s_clipped)
-        )
+        s_norm = np.clip(s, v_min_thr, 1.0)
 
         s_resized = cv2.resize(s_norm, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
         heat_arr = (s_resized * 255).astype(np.uint8)
@@ -328,7 +331,7 @@ class InferenceController(QObject):
     def compute_segmentation(
         self,
         smoothed_s: Optional[np.ndarray],
-        seg_pct: int,
+        seg_pct: float,
         epsilon: float,
         display_w: int,
         display_h: int,

@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from core.utils.constants import DEFAULT_CLASSES
 
 
@@ -19,6 +21,7 @@ class DatasetState:
         notes (dict[str, str]): Maps image filename to a free-text note.
         class_names (list[str]): Ordered class name registry.
         class_colors (dict[str, tuple]): Maps class name to an RGB color tuple.
+        class_visibility (dict[str, bool]): Maps class name to viewport visibility.
     """
 
     def __init__(self) -> None:
@@ -32,10 +35,13 @@ class DatasetState:
         self.inspectors = {}  # { "img.jpg": "John Doe" }
         self.notes = {}  # { "img.jpg": "Needs review" }
         self.review_decisions = {}  # { "img.jpg": "accept" | "reject" }
+        self.decision_timestamps = {}  # { "img.jpg": ISO-8601 UTC string }
+        self.image_sizes = {}  # { "img.jpg": (width, height) } — cached to avoid PIL reads on save
 
         # Class registry — initialized from defaults, NOT cleared on folder load
         self.class_names = list(DEFAULT_CLASSES.keys())
         self.class_colors = dict(DEFAULT_CLASSES)  # { name: (r, g, b) }
+        self.class_visibility = {name: True for name in self.class_names}
 
     def clear(self) -> None:
         """Reset per-folder data. Class registry is intentionally preserved."""
@@ -45,11 +51,14 @@ class DatasetState:
         self.inspectors.clear()
         self.notes.clear()
         self.review_decisions.clear()
+        self.decision_timestamps.clear()
+        self.image_sizes.clear()
 
     def reset_classes(self) -> None:
         """Reset the class registry back to defaults."""
         self.class_names = list(DEFAULT_CLASSES.keys())
         self.class_colors = dict(DEFAULT_CLASSES)
+        self.class_visibility = {name: True for name in self.class_names}
 
     def is_reviewed(self, img_name: str) -> bool:
         """Return whether an image has at least one annotation or metadata entry.
@@ -62,9 +71,9 @@ class DatasetState:
                 assignment, or note; ``False`` otherwise.
         """
         has_anno = bool(self.annotations.get(img_name))
-        has_meta = bool(self.inspectors.get(img_name) or self.notes.get(img_name))
+        has_note = bool(self.notes.get(img_name))
         has_decision = img_name in self.review_decisions
-        return has_anno or has_meta or has_decision
+        return has_anno or has_note or has_decision
 
     # --- Annotation CRUD ---
 
@@ -81,7 +90,12 @@ class DatasetState:
             thickness (float): Line thickness for the annotation (default: 2.0).
         """
         self.annotations.setdefault(image_name, []).append(
-            {"category_name": category, "polygon": polygon, "thickness": thickness}
+            {
+                "category_name": category.lower(),
+                "polygon": polygon,
+                "thickness": thickness,
+                "visible": True,
+            }
         )
 
     def update_annotation_thickness(
@@ -98,7 +112,7 @@ class DatasetState:
         """Change the category_name of a specific annotation."""
         annos = self.annotations.get(image_name, [])
         if 0 <= index < len(annos):
-            annos[index]["category_name"] = new_class
+            annos[index]["category_name"] = new_class.lower()
 
     def delete_annotation(self, image_name: str, index: int) -> None:
         """Remove the annotation at *index* for *image_name*.
@@ -127,6 +141,21 @@ class DatasetState:
         if 0 <= index < len(annos):
             annos[index]["polygon"] = points
 
+    def set_annotation_visible(
+        self, image_name: str, index: int, visible: bool
+    ) -> None:
+        """Set viewport visibility for a specific annotation."""
+        annos = self.annotations.get(image_name, [])
+        if 0 <= index < len(annos):
+            annos[index]["visible"] = bool(visible)
+
+    def is_annotation_visible(self, image_name: str, index: int) -> bool:
+        """Return whether a specific annotation should render in the viewport."""
+        annos = self.annotations.get(image_name, [])
+        if 0 <= index < len(annos):
+            return annos[index].get("visible", True)
+        return True
+
     # --- Class Registry ---
 
     def add_class(self, name: str, color: tuple) -> None:
@@ -136,9 +165,11 @@ class DatasetState:
             name (str): Class label to register. Duplicates are ignored.
             color (tuple): RGB color tuple to associate with the class.
         """
+        name = name.lower()
         if name not in self.class_names:
             self.class_names.append(name)
             self.class_colors[name] = color
+            self.class_visibility[name] = True
 
     def delete_class(self, name: str) -> None:
         """Remove a class and all annotations that reference it.
@@ -150,10 +181,20 @@ class DatasetState:
         if name in self.class_names:
             self.class_names.remove(name)
             self.class_colors.pop(name, None)
+            self.class_visibility.pop(name, None)
             for img in self.annotations:
                 self.annotations[img] = [
                     a for a in self.annotations[img] if a.get("category_name") != name
                 ]
+
+    def set_class_visible(self, name: str, visible: bool) -> None:
+        """Set viewport visibility for an annotation class."""
+        if name in self.class_names:
+            self.class_visibility[name] = bool(visible)
+
+    def is_class_visible(self, name: str) -> bool:
+        """Return whether an annotation class should render in the viewport."""
+        return self.class_visibility.get(name, True)
 
     # --- Per-image Metadata ---
 
@@ -184,8 +225,12 @@ class DatasetState:
         """
         if decision is None:
             self.review_decisions.pop(image_name, None)
+            self.decision_timestamps.pop(image_name, None)
         else:
             self.review_decisions[image_name] = decision
+            self.decision_timestamps[image_name] = datetime.now(
+                timezone.utc
+            ).isoformat()
 
     def get_review_decision(self, image_name: str):
         """Return the image-level review decision, or None if not set."""

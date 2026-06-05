@@ -9,15 +9,13 @@ Rules:
 
 import os
 import csv
-import json
 import logging
+import shutil
 from pathlib import Path
-from datetime import datetime
 from typing import Optional
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw
 
 from core.utils.constants import DEFAULT_CLASS_COLORS
 
@@ -83,106 +81,13 @@ class IOController:
             logger.warning(f"Could not read image: {path}")
         return bgr
 
-    def export_polygons_and_data(self, out_dir: str) -> str:
-        """Write overlay images and a JSON data file to *out_dir*.
-
-        For each annotated image, composites filled polygon overlays onto the
-        source image using Pillow and saves the result as a JPEG. A single
-        JSON file containing all annotations, metadata, and class definitions
-        is written alongside the overlay images. Colors are stored as plain
-        ``[r, g, b]`` lists for JSON serialisability.
-
-        Args:
-            out_dir (str): Absolute path to the output directory.
-
-        Returns:
-            str: Human-readable success message including the count of overlay
-                images saved and the path to the JSON data file.
-
-        Raises:
-            RuntimeError: If no images are currently loaded in the model.
-        """
-        state = self.model.state
-        if not state.image_files:
-            logger.warning("Attempted to export, but no images are loaded.")
-            raise RuntimeError("No images loaded.")
-
-        logger.debug("Starting polygon export to: %s", out_dir)
-
-        out_path = Path(out_dir)
-        tray_name = Path(state.image_dir).name if state.image_dir else "tray"
-        timestamp = datetime.now().strftime("%m-%d-%y-%H-%M-%S")
-
-        payload = {
-            "meta": {"tray": tray_name, "exported_at": timestamp},
-            "classes": list(state.class_names),
-            # Colors stored as (r,g,b) tuples — JSON-serialisable, no Qt needed.
-            "class_colors": {
-                name: list(rgb) for name, rgb in state.class_colors.items()
-            },
-            "images": {},
-        }
-
-        saved_count = 0
-        for name in state.image_files:
-            anns = state.annotations.get(name, [])
-            is_rev = state.is_reviewed(name)
-
-            payload["images"][name] = {
-                "inspector": state.inspectors.get(name, "") if is_rev else "",
-                "note": state.notes.get(name, "") if is_rev else "",
-                "annotations": [
-                    {
-                        "class": a["category_name"],
-                        "polygon": [(float(x), float(y)) for (x, y) in a["polygon"]],
-                        "thickness": a.get("thickness", 2.0),
-                    }
-                    for a in anns
-                ],
-            }
-
-            if not anns:
-                continue
-
-            src = Path(state.image_dir) / name
-            if not src.exists():
-                continue
-
-            try:
-                base = Image.open(src).convert("RGBA")
-                overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-                draw = ImageDraw.Draw(overlay, "RGBA")
-
-                for a in anns:
-                    pts = [(float(x), float(y)) for (x, y) in a["polygon"]]
-                    if len(pts) < 2:
-                        continue
-                    rgb = state.class_colors.get(a["category_name"], (255, 255, 255))
-                    draw.polygon(pts, fill=(*rgb, 80), outline=(*rgb, 255))
-                    draw.line(pts + [pts[0]], fill=(*rgb, 255), width=3)
-
-                composed = Image.alpha_composite(base, overlay).convert("RGB")
-                out_name = f"{tray_name}_{Path(name).stem}_{timestamp}_poly.jpg"
-                composed.save(out_path / out_name, "JPEG", quality=95)
-                saved_count += 1
-            except Exception as e:
-                logger.error(f"Failed to export overlay for {name}: {e}")
-
-        data_path = out_path / f"{tray_name}_{timestamp}_data.json"
-        with open(data_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-
-        logger.debug(
-            "Successfully exported %d overlay images and data JSON.", saved_count
-        )
-        return f"Saved {saved_count} image(s) + data JSON:\n{data_path}"
-
     def export_csv(self, out_path: str) -> str:
         """Write per-image metadata to a CSV file at *out_path*.
 
-        Each row contains tray name, image filename, inspector, note, and a
-        comma-separated list of unique annotation class names (or ``"good"``
-        when the image has been reviewed but carries no annotations).
+        Each row contains tray name, image filename, accept/reject decision,
+        inspector, note, and a comma-separated list of unique annotation class
+        names (or ``"good"`` when the image has been reviewed but carries no
+        annotations).
 
         Args:
             out_path (str): Absolute path for the output CSV file.
@@ -207,9 +112,12 @@ class IOController:
                 {
                     "tray": tray_name,
                     "image_name": name,
-                    "inspector": state.inspectors.get(name, "") if reviewed else "",
+                    "decision": state.review_decisions.get(name, "")
+                    if reviewed
+                    else "",
+                    "inspector": state.inspectors.get(name, ""),
                     "note": state.notes.get(name, "") if reviewed else "",
-                    "classes": (", ".join(unique_classes) if unique_classes else "good")
+                    "classes": (",".join(unique_classes) if unique_classes else "good")
                     if reviewed
                     else "",
                 }
@@ -217,7 +125,15 @@ class IOController:
 
         with open(out_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
-                f, fieldnames=["tray", "image_name", "inspector", "note", "classes"]
+                f,
+                fieldnames=[
+                    "tray",
+                    "image_name",
+                    "decision",
+                    "classes",
+                    "inspector",
+                    "note",
+                ],
             )
             writer.writeheader()
             writer.writerows(rows)
@@ -278,128 +194,143 @@ class IOController:
         logger.debug("Exported %d binary mask(s) to: %s", saved, out_dir)
         return f"Saved {saved} binary mask(s) to:\n{out_dir}"
 
+    def export_annotation_classes(self, out_dir: str) -> str:
+        """Write annotation class names to annotation_classes.txt in *out_dir*.
+
+        The file is a simple UTF-8 text file with one class name per line,
+        preserving the current class registry order.
+
+        Args:
+            out_dir (str): Directory where ``annotation_classes.txt`` is saved.
+
+        Returns:
+            str: Human-readable success message containing the saved path.
+        """
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        class_path = out_path / "annotation_classes.txt"
+
+        with open(class_path, "w", encoding="utf-8") as f:
+            for name in self.model.state.class_names:
+                f.write(f"{name}\n")
+
+        return f"Annotation classes saved to:\n{class_path}"
+
+    def export_train_structure(self, out_dir: str) -> str:
+        """Export an MVTec-style anomaly detection training directory.
+
+        Structure:
+            {out_dir}/
+            ├── train/good/          reviewed images with no annotations
+            ├── test/{defect}/       annotated images; multi-class joined with "-"
+            └── ground_truth/{defect}/  binary mask PNGs (same subfolder as test)
+
+        Args:
+            out_dir: Root directory to write the structure into.
+
+        Returns:
+            str: Human-readable summary of counts written.
+
+        Raises:
+            RuntimeError: If no images are loaded.
+        """
+        state = self.model.state
+        if not state.image_files:
+            raise RuntimeError("No images loaded.")
+
+        root = Path(out_dir)
+        counts = {"train_good": 0, "test": 0, "masks": 0, "skipped": 0}
+
+        for name in state.image_files:
+            src = Path(state.image_dir) / name
+            if not src.exists():
+                counts["skipped"] += 1
+                logger.warning("Image not found, skipping: %s", src)
+                continue
+
+            anns = state.annotations.get(name, [])
+            reviewed = state.is_reviewed(name)
+
+            if not anns and reviewed:
+                dest = root / "train" / "good"
+                dest.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest / name)
+                counts["train_good"] += 1
+
+            elif anns:
+                folder = "-".join(sorted({a["category_name"] for a in anns}))
+
+                test_dest = root / "test" / folder
+                test_dest.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, test_dest / name)
+                counts["test"] += 1
+
+                img = cv2.imread(str(src), cv2.IMREAD_GRAYSCALE)
+                if img is not None:
+                    h, w = img.shape[:2]
+                    mask = np.zeros((h, w), dtype=np.uint8)
+                    for a in anns:
+                        pts = np.array(a["polygon"], dtype=np.int32).reshape((-1, 1, 2))
+                        cv2.fillPoly(mask, [pts], 255)
+                    gt_dest = root / "ground_truth" / folder
+                    gt_dest.mkdir(parents=True, exist_ok=True)
+                    cv2.imwrite(str(gt_dest / f"{src.stem}.png"), mask)
+                    counts["masks"] += 1
+
+        logger.debug("Exported train structure to: %s — %s", out_dir, counts)
+        return (
+            f"Train structure exported to:\n{out_dir}\n"
+            f"  train/good:      {counts['train_good']} images\n"
+            f"  test/*:          {counts['test']} images\n"
+            f"  ground_truth/*:  {counts['masks']} masks"
+            + (
+                f"\n  skipped:         {counts['skipped']} (file not found)"
+                if counts["skipped"]
+                else ""
+            )
+        )
+
     # ------------------------------------------------------------------ #
     # Import
     # ------------------------------------------------------------------ #
 
-    def import_data_json(self, path: str) -> None:
-        """Load annotations from a custom or COCO JSON file into the model.
+    def import_annotation_classes(self, path: str) -> str:
+        """Merge annotation class names from a simple UTF-8 text file.
 
-        Clears existing annotations, inspectors, and notes before importing.
-        Dispatches to :meth:`_import_custom_format` when ``images`` is a
-        ``dict``, or :meth:`_import_coco_format` when it is a ``list``.
-        Triggers a full model reset after loading so all attached views
-        refresh.
+        Reads one class name per line. Blank lines and lines beginning with
+        ``#`` after trimming whitespace are ignored. Existing class names are
+        skipped and keep their current colors; new classes receive the next
+        default color in registration order.
 
         Args:
-            path (str): Absolute path to the JSON file to import.
+            path (str): Absolute path to the class-name text file.
 
-        Raises:
-            json.JSONDecodeError: If the file is not valid JSON.
-            OSError: If the file cannot be opened.
+        Returns:
+            str: Human-readable summary of imported and skipped class counts.
         """
         with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            candidates = [
+                line.strip()
+                for line in f
+                if line.strip() and not line.strip().startswith("#")
+            ]
 
         state = self.model.state
-        state.annotations.clear()
-        state.inspectors.clear()
-        state.notes.clear()
+        imported = 0
+        skipped = 0
 
-        images_node = data.get("images")
-        if isinstance(images_node, dict):
-            self._import_custom_format(state, data, images_node)
-        elif isinstance(images_node, list):
-            self._import_coco_format(state, data, images_node)
-
-        # Tell all attached views to fully refresh
         self.model.beginResetModel()
-        self.model.endResetModel()
+        try:
+            for name in candidates:
+                if name in state.class_names:
+                    skipped += 1
+                    continue
 
-    def _import_custom_format(self, state, data: dict, images_node: dict) -> None:
-        """Populate *state* from a custom AnnoMate JSON export.
+                idx = len(state.class_names)
+                color = DEFAULT_CLASS_COLORS[idx % len(DEFAULT_CLASS_COLORS)]
+                state.add_class(name, color)
+                imported += 1
+        finally:
+            self.model.endResetModel()
 
-        Rebuilds the class registry from the ``classes`` and ``class_colors``
-        keys, then populates annotations, inspector, and note fields for each
-        image entry. Missing colors fall back to
-        :data:`~core.utils.constants.DEFAULT_CLASS_COLORS`.
-
-        Args:
-            state: Dataset state object whose fields are mutated in place.
-            data (dict): Top-level parsed JSON object.
-            images_node (dict): The ``images`` sub-object from *data*, keyed
-                by image filename.
-        """
-        classes = data.get("classes", [])
-        if classes:
-            state.class_names = list(classes)
-            saved_colors = data.get("class_colors", {})
-            state.class_colors = {}
-            for i, name in enumerate(state.class_names):
-                raw = saved_colors.get(name)
-                if isinstance(raw, (list, tuple)) and len(raw) == 3:
-                    state.class_colors[name] = (int(raw[0]), int(raw[1]), int(raw[2]))
-                else:
-                    state.class_colors[name] = DEFAULT_CLASS_COLORS[
-                        i % len(DEFAULT_CLASS_COLORS)
-                    ]
-
-        for name, info in images_node.items():
-            state.inspectors[name] = info.get("inspector", "")
-            state.notes[name] = info.get("note", "")
-            recs = [
-                {
-                    "category_name": a.get("class", ""),
-                    "polygon": a.get("polygon", []),
-                    "thickness": a.get("thickness", 2.0),
-                }
-                for a in info.get("annotations", [])
-            ]
-            if recs:
-                state.annotations[name] = recs
-
-    def _import_coco_format(self, state, data: dict, images_node: list) -> None:
-        """Populate *state* from a COCO-format JSON annotation file.
-
-        Registers any new categories into the class registry, then maps COCO
-        annotation records to per-filename polygon entries using the image ID
-        lookup. Segmentation data is expected in flattened
-        ``[x0, y0, x1, y1, …]`` format.
-
-        Args:
-            state: Dataset state object whose fields are mutated in place.
-            data (dict): Top-level parsed JSON object, expected to contain
-                ``categories`` and ``annotations`` keys.
-            images_node (list): The ``images`` list from *data*, each entry
-                containing ``id`` and ``file_name``.
-        """
-        cat_map = {}
-        if "categories" in data:
-            for c in data["categories"]:
-                name = c["name"]
-                cat_map[c["id"]] = name
-                if name not in state.class_names:
-                    idx = len(state.class_names)
-                    state.class_names.append(name)
-                    state.class_colors[name] = DEFAULT_CLASS_COLORS[
-                        idx % len(DEFAULT_CLASS_COLORS)
-                    ]
-
-        img_id_map = {img["id"]: img["file_name"] for img in images_node}
-
-        for ann in data.get("annotations", []):
-            img_id = ann["image_id"]
-            if img_id not in img_id_map:
-                continue
-            filename = img_id_map[img_id]
-            cat_name = cat_map.get(ann["category_id"], "Unknown")
-            seg = ann.get("segmentation", [])
-            final_poly = []
-            if isinstance(seg, list) and seg:
-                pts_list = seg[0] if isinstance(seg[0], list) else seg
-                for i in range(0, len(pts_list) - 1, 2):
-                    final_poly.append((float(pts_list[i]), float(pts_list[i + 1])))
-            if final_poly:
-                state.annotations.setdefault(filename, []).append(
-                    {"category_name": cat_name, "polygon": final_poly}
-                )
+        return f"Imported {imported} class(es), skipped {skipped} duplicate(s)."

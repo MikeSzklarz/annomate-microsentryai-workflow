@@ -49,10 +49,10 @@ class TestStatusColumn:
         model.delete_annotation(0, 0)
         assert model.data(model.index(0, 1)) == "Pending"
 
-    def test_inspector_marks_reviewed(self, model):
+    def test_inspector_alone_does_not_mark_reviewed(self, model):
         model.load_folder("/fake", ["img.jpg"])
         model.set_inspector(0, "Alice")
-        assert model.data(model.index(0, 1)) == "Reviewed"
+        assert model.data(model.index(0, 1)) == "Pending"
 
 
 class TestQueryAPI:
@@ -65,7 +65,33 @@ class TestQueryAPI:
 
     def test_get_class_color_known(self, model):
         model.add_class("Defect", (255, 0, 0))
-        assert model.get_class_color("Defect") == (255, 0, 0)
+        assert model.get_class_color("defect") == (255, 0, 0)
+
+    def test_class_visibility_defaults_visible_and_toggles(self, model):
+        model.add_class("Defect", (255, 0, 0))
+
+        assert model.is_class_visible("defect") is True
+        assert model.toggle_class_visibility("defect") is False
+        assert model.is_class_visible("defect") is False
+        assert model.toggle_class_visibility("defect") is True
+
+    def test_annotation_visibility_defaults_visible_and_toggles(self, model):
+        model.load_folder("/fake", ["img.jpg"])
+        model.add_annotation(0, "Defect", [(0, 0), (1, 0), (1, 1)])
+
+        assert model.is_annotation_visible(0, 0) is True
+        assert model.toggle_annotation_visibility(0, 0) is False
+        assert model.is_annotation_visible(0, 0) is False
+        assert model.toggle_annotation_visibility(0, 0) is True
+
+    def test_get_class_annotation_count(self, model):
+        model.load_folder("/fake", ["img.jpg", "other.jpg"])
+        model.add_annotation(0, "Defect", [(0, 0), (1, 0), (1, 1)])
+        model.add_annotation(0, "Other", [(0, 0), (1, 0), (1, 1)])
+        model.add_annotation(1, "Defect", [(0, 0), (1, 0), (1, 1)])
+
+        assert model.get_class_annotation_count("defect") == 2
+        assert model.get_class_annotation_count("missing") == 0
 
     def test_get_inspector_empty_initially(self, model):
         model.load_folder("/fake", ["img.jpg"])

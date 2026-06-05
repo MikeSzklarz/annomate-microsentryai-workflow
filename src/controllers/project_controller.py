@@ -39,7 +39,6 @@ class ProjectController(QObject):
     Attributes:
         dataset_model: DatasetTableModel.
         inference_model: InferenceModel.
-        validation_model: ValidationModel.
         io_controller: IOController (used for image-dir scans).
         inference_controller: InferenceController (for model_path tracking).
 
@@ -61,17 +60,19 @@ class ProjectController(QObject):
         self,
         dataset_model,
         inference_model,
-        validation_model,
         io_controller,
         inference_controller=None,
+        calibration_model=None,
+        center_template_model=None,
         parent: QObject = None,
     ) -> None:
         super().__init__(parent)
         self._dataset_model = dataset_model
         self._inference_model = inference_model
-        self._validation_model = validation_model
         self._io_controller = io_controller
         self._inference_controller = inference_controller
+        self._calibration_model = calibration_model
+        self._center_template_model = center_template_model
 
         self._project_io = ProjectIO()
         self._autosave_manager = AutosaveManager(interval_minutes=5, parent=self)
@@ -90,6 +91,11 @@ class ProjectController(QObject):
         # suppresses spurious dirty events fired during our own load sequence.
         self._dataset_model.dataChanged.connect(self._on_model_changed)
         self._dataset_model.modelReset.connect(self._on_model_changed)
+        if self._calibration_model is not None:
+            self._calibration_model.calibration_changed.connect(self._on_model_changed)
+            self._calibration_model.grid_changed.connect(self._on_model_changed)
+        if self._center_template_model is not None:
+            self._center_template_model.template_changed.connect(self._on_model_changed)
 
     # ------------------------------------------------------------------ #
     # Properties (read-only for AppWindow)
@@ -149,10 +155,13 @@ class ProjectController(QObject):
         state.clear()
         state.reset_classes()
         self._inference_model.state.clear()
-        self._validation_model.state.clear()
+        if self._center_template_model is not None:
+            self._center_template_model.clear_template()
 
         self._loading = True
         try:
+            if self._calibration_model is not None:
+                self._calibration_model.clear_calibration()
             self._dataset_model.beginResetModel()
             self._dataset_model.endResetModel()
         finally:
@@ -207,12 +216,31 @@ class ProjectController(QObject):
                     "Annotations are loaded but images will not display."
                 )
 
+            calib_state = (
+                self._calibration_model._state if self._calibration_model else None
+            )
+            center_template_state = (
+                self._center_template_model._state
+                if self._center_template_model
+                else None
+            )
             self._project_io.apply_project_to_states(
                 project_data,
                 ds,
-                self._validation_model.state,
                 self._inference_model.state,
+                calibration_state=calib_state,
+                center_template_state=center_template_state,
             )
+            if self._calibration_model is not None:
+                self._calibration_model.calibration_changed.emit()
+                self._calibration_model.grid_changed.emit()
+            if self._center_template_model is not None:
+                self._center_template_model.template_changed.emit()
+                logger.debug(
+                    "Center template state applied from project: enabled=%s path=%s",
+                    self._center_template_model.enabled(),
+                    self._center_template_model.template_path(),
+                )
 
             # Single reset — views see the complete state on first refresh
             self._dataset_model.beginResetModel()
@@ -287,15 +315,22 @@ class ProjectController(QObject):
                 sorted(orphaned),
             )
 
+        calib_state = (
+            self._calibration_model._state if self._calibration_model else None
+        )
+        center_template_state = (
+            self._center_template_model._state if self._center_template_model else None
+        )
         path = self._project_io.save_project(
             project_dir=project_dir,
             project_name=project_name,
             dataset_state=self._dataset_model.state,
-            validation_state=self._validation_model.state,
             inference_state=self._inference_model.state,
             created_at=self._created_at,
             save_score_maps=True,
             model_path=self._resolve_model_path(),
+            calibration_state=calib_state,
+            center_template_state=center_template_state,
         )
         if self._created_at is None:
             self._created_at = datetime.now(timezone.utc).isoformat()
@@ -313,15 +348,24 @@ class ProjectController(QObject):
             return
         autosave_dir = os.path.join(project_dir, "autosave")
         try:
+            calib_state = (
+                self._calibration_model._state if self._calibration_model else None
+            )
+            center_template_state = (
+                self._center_template_model._state
+                if self._center_template_model
+                else None
+            )
             path = self._project_io.save_project(
                 project_dir=autosave_dir,
                 project_name=f"{self._project_name}.autosave",
                 dataset_state=self._dataset_model.state,
-                validation_state=self._validation_model.state,
                 inference_state=self._inference_model.state,
                 created_at=self._created_at,
                 save_score_maps=False,
                 model_path=self._resolve_model_path(),
+                calibration_state=calib_state,
+                center_template_state=center_template_state,
             )
             self.autosave_written.emit(path)
         except Exception as exc:
