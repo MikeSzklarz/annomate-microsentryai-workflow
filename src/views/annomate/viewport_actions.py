@@ -422,6 +422,27 @@ class ViewportActionsBar(QFrame):
         opacity_row.addWidget(self._crop_opacity_lbl)
         panel_layout.addLayout(opacity_row)
 
+        # Border color
+        border_row = QHBoxLayout()
+        border_row.setSpacing(8)
+        border_lbl = QLabel("Border")
+        border_lbl.setFixedWidth(58)
+        border_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        border_row.addWidget(border_lbl)
+        self._crop_color_btn = QPushButton()
+        self._crop_color_btn.setFixedSize(32, 20)
+        self._crop_color_btn.setToolTip("Click to set a custom border color")
+        self._crop_color_btn.clicked.connect(self._on_crop_color_clicked)
+        border_row.addWidget(self._crop_color_btn)
+        self._crop_color_auto_btn = QPushButton("Auto")
+        self._crop_color_auto_btn.setFixedHeight(20)
+        self._crop_color_auto_btn.setToolTip("Reset to auto-contrast color")
+        self._crop_color_auto_btn.clicked.connect(self._on_crop_color_auto)
+        border_row.addWidget(self._crop_color_auto_btn)
+        border_row.addStretch()
+        panel_layout.addLayout(border_row)
+        self._update_crop_color_swatch(None)
+
         # Center dot
         self._crop_center_dot_chk = QCheckBox("Show center dot")
         self._crop_center_dot_chk.setToolTip("Show center dot")
@@ -678,6 +699,34 @@ class ViewportActionsBar(QFrame):
             return
         self._canvas.set_center_crop(center_dot=checked)
 
+    def _on_crop_color_clicked(self) -> None:
+        current = self._canvas.center_crop_settings().get("border_color")
+        initial = QColor(*current) if current else QColor(255, 255, 255)
+        color = QColorDialog.getColor(initial, self, "Border Color")
+        if color.isValid():
+            rgb = (color.red(), color.green(), color.blue())
+            self._canvas.set_center_crop(border_color=rgb)
+            self._update_crop_color_swatch(rgb)
+
+    def _on_crop_color_auto(self) -> None:
+        self._canvas.set_center_crop(border_color=None)
+        self._update_crop_color_swatch(None)
+
+    def _update_crop_color_swatch(self, rgb) -> None:
+        if rgb is None:
+            self._crop_color_btn.setStyleSheet(
+                "background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+                "stop:0 #ffffff,stop:0.49 #ffffff,stop:0.5 #000000,stop:1 #000000);"
+                "border: 1px solid #888;"
+            )
+            self._crop_color_btn.setToolTip("Auto-contrast (click to override)")
+        else:
+            r, g, b = rgb
+            self._crop_color_btn.setStyleSheet(
+                f"background-color: rgb({r},{g},{b}); border: 1px solid #888;"
+            )
+            self._crop_color_btn.setToolTip(f"Border color: rgb({r},{g},{b}) — click to change")
+
     def _on_reset_crop_clicked(self) -> None:
         if self._refreshing:
             return
@@ -873,6 +922,7 @@ class ViewportActionsBar(QFrame):
         self._crop_opacity_slider.setValue(opacity_pct)
         self._crop_opacity_lbl.setText(f"{opacity_pct}%")
         self._crop_center_dot_chk.setChecked(center_dot)
+        self._update_crop_color_swatch(settings.get("border_color"))
         if settings.get("calibrating") != self._center_calibrating:
             self._center_calibrating = bool(settings.get("calibrating"))
         self._crop_hint_lbl.setText(
