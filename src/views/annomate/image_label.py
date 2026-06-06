@@ -382,6 +382,7 @@ class ImageLabel(QLabel):
             self._dragging_center_crop = False
             if self._center_crop_calibrating:
                 self.setCursor(Qt.SizeAllCursor)
+                self.setFocus()
             elif self.current_tool is None:
                 self.setCursor(Qt.ArrowCursor)
         if border_color is not self._UNSET:
@@ -433,6 +434,17 @@ class ImageLabel(QLabel):
         x, y = self.display_to_original(self.view_to_display(pos_view))
         self._center_crop_center_x = max(0.0, min(float(x), float(img_w)))
         self._center_crop_center_y = max(0.0, min(float(y), float(img_h)))
+        self.update()
+        self.centerCropChanged.emit(self.center_crop_settings())
+
+    def _nudge_center_crop(self, dx: float, dy: float) -> None:
+        if self._orig_image_bgr is None:
+            return
+        img_h, img_w = self._orig_image_bgr.shape[:2]
+        cx = (self._center_crop_center_x if self._center_crop_center_x is not None else img_w / 2.0) + dx
+        cy = (self._center_crop_center_y if self._center_crop_center_y is not None else img_h / 2.0) + dy
+        self._center_crop_center_x = max(0.0, min(cx, float(img_w)))
+        self._center_crop_center_y = max(0.0, min(cy, float(img_h)))
         self.update()
         self.centerCropChanged.emit(self.center_crop_settings())
 
@@ -672,6 +684,19 @@ class ImageLabel(QLabel):
         Args:
             event (QKeyEvent): The key press event.
         """
+        if self._center_crop_calibrating:
+            step = 10.0 if event.modifiers() & Qt.ShiftModifier else 1.0
+            _arrow_delta = {
+                Qt.Key_Left: (-step, 0.0),
+                Qt.Key_Right: (step, 0.0),
+                Qt.Key_Up: (0.0, -step),
+                Qt.Key_Down: (0.0, step),
+            }
+            if event.key() in _arrow_delta:
+                dx, dy = _arrow_delta[event.key()]
+                self._nudge_center_crop(dx, dy)
+                return
+
         if self.current_tool == SAM_BBOX:
             if event.key() in (Qt.Key_Return, Qt.Key_Enter):
                 self.accept_sam_ghost()
