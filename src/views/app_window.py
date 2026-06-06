@@ -92,6 +92,7 @@ class AppWindow(QMainWindow):
         self.project_controller.project_saved.connect(
             lambda path: self.statusBar().showMessage(f"Saved: {path}", 4000)
         )
+        self.project_controller.project_saved.connect(lambda _: self._update_title())
         self.project_controller.autosave_written.connect(
             lambda _: self.statusBar().showMessage("Autosaved", 3000)
         )
