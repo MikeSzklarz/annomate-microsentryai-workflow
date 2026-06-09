@@ -43,8 +43,6 @@ jobs:
   # -------------------------------------------------------------------------
   test:
     name: Test on ${{ matrix.os }} (${{ matrix.env_name }}) with Python 3.10
-    needs: lint
-    if: always() && (needs.lint.result == 'success' || needs.lint.result == 'skipped')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
