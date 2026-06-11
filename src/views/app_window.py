@@ -424,19 +424,17 @@ class AppWindow(QMainWindow):
             QMessageBox.critical(self, "Export Error", str(exc))
 
     def _export_project_template(self) -> None:
-        out_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Project Template",
-            os.path.join(self._export_start_dir(), "template.annoproj"),
-            "AnnoMate Project (*.annoproj)",
-        )
-        if not out_path:
-            return
-        from pathlib import Path
-        template_name = Path(out_path).stem
+        if not self.project_controller.has_project:
+            self._save_project_as()
+            if not self.project_controller.has_project:
+                return
         try:
-            msg = self.project_controller.export_template(out_path, template_name)
-            QMessageBox.information(self, "Export Project Template", msg)
+            out_path = self.project_controller.export_template()
+            QMessageBox.information(
+                self,
+                "Export Project Template",
+                f"Template exported to:\n{out_path}",
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
 

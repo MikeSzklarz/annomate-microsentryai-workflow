@@ -443,8 +443,21 @@ class ProjectController(QObject):
     # Template export
     # ------------------------------------------------------------------ #
 
-    def export_template(self, output_path: str, template_name: str) -> str:
-        """Export a settings-only .annoproj template and return a status message."""
+    def export_template(self) -> str:
+        """Export a settings-only .annoproj to <project_dir>/template/template.annoproj.
+
+        Also copies the center template image into the subfolder if one is set.
+        Returns the absolute path to the written .annoproj file.
+
+        Raises:
+            ValueError: If no project has been saved yet (no project directory).
+        """
+        if not self._project_dir:
+            raise ValueError(
+                "No project directory set. Save the project before exporting a template."
+            )
+        template_dir = os.path.join(self._project_dir, "template")
+        output_path = os.path.join(template_dir, "template.annoproj")
         calib_state = (
             self._calibration_model._state if self._calibration_model else None
         )
@@ -458,13 +471,13 @@ class ProjectController(QObject):
         )
         self._project_io.export_template(
             template_path=output_path,
-            project_name=template_name,
+            project_name=self._project_name or "template",
             dataset_state=self._dataset_model.state,
             calibration_state=calib_state,
             center_template_state=center_template_state,
             anomaly_constraint_state=anomaly_constraint_state,
         )
-        return f"Template exported to:\n{output_path}"
+        return output_path
 
     # ------------------------------------------------------------------ #
     # COCO standalone export

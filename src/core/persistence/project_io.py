@@ -9,6 +9,7 @@ so callers can inspect data before applying it.
 import json
 import logging
 import os
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -294,11 +295,18 @@ class ProjectIO:
 
         if center_template_state is not None:
             ts = center_template_state
+            src = ts.template_path or ts.template_file
+            if src and os.path.isfile(src):
+                img_filename = os.path.basename(src)
+                dst = os.path.join(template_dir, img_filename)
+                if os.path.abspath(src) != os.path.abspath(dst):
+                    shutil.copy2(src, dst)
+                stored_file = img_filename
+            else:
+                stored_file = self._as_relative_path(src, template_dir) if src else ""
             tmpl["center_template"] = {
                 "enabled": ts.enabled,
-                "template_file": self._as_relative_path(
-                    ts.template_path or ts.template_file, template_dir
-                ),
+                "template_file": stored_file,
                 "anchor_x": ts.anchor_x,
                 "anchor_y": ts.anchor_y,
                 "crop_shape": ts.crop_shape,
