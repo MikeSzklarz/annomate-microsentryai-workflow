@@ -211,7 +211,7 @@ class TestSerialization:
         """Verify that loading an empty dict restores pixel-scale defaults.
 
         Calling from_dict({}) should be equivalent to creating a fresh model: scale 1.0,
-        unit 'px', not user-calibrated, grid visible with default opacity. Success means
+        unit 'px', not user-calibrated, grid hidden (off by default). Success means
         all default values are correctly applied even with no keys present.
         """
         model.from_dict({})
@@ -219,7 +219,7 @@ class TestSerialization:
         assert model.has_scale()
         assert model.scale() == pytest.approx(1.0)
         assert model.unit() == "px"
-        assert model.grid_visible() is True
+        assert model.grid_visible() is False
         assert model.grid_opacity() == pytest.approx(0.5)
 
     def test_legacy_calibrated_dict_defaults_user_calibrated(self, model):
