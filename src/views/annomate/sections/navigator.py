@@ -111,13 +111,13 @@ class DataNavigatorSection(QWidget):
         nav_h.setSpacing(4)
 
         self._btn_prev = QToolButton()
-        self._btn_prev.setText("‹ Prev")
+        self._btn_prev.setText("<(A) Prev")
         self._btn_prev.setToolTip("Previous image")
         self._btn_prev.clicked.connect(self.prev_requested)
         nav_h.addWidget(self._btn_prev)
 
         self._btn_next = QToolButton()
-        self._btn_next.setText("Next ›")
+        self._btn_next.setText("Next (D)>")
         self._btn_next.setToolTip("Next image")
         self._btn_next.clicked.connect(self.next_requested)
         nav_h.addWidget(self._btn_next)

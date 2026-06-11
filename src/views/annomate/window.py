@@ -1408,6 +1408,8 @@ class AnnoMateWindow(QWidget):
     def keyPressEvent(self, event) -> None:
         """Handle annotation hotkeys.
 
+        - ``A``: previous image (disabled during center-crop calibration)
+        - ``D``: next image (disabled during center-crop calibration)
         - ``P``: toggle polygon tool
         - ``S``: toggle SAM segment tool
         - ``C``: toggle calibration tool
@@ -1417,7 +1419,12 @@ class AnnoMateWindow(QWidget):
         Args:
             event: The key press event.
         """
-        if event.key() == Qt.Key_P:
+        calibrating = self.canvas.center_crop_calibrating
+        if event.key() == Qt.Key_A and not calibrating:
+            self._prev_image()
+        elif event.key() == Qt.Key_D and not calibrating:
+            self._next_image()
+        elif event.key() == Qt.Key_P:
             self.tool_palette.toggle_polygon()
         elif event.key() == Qt.Key_S:
             self.tool_palette.toggle_sam()

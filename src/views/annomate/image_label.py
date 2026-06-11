@@ -331,6 +331,11 @@ class ImageLabel(QLabel):
         self._active_color = color if isinstance(color, QColor) else QColor(0, 200, 0)
 
     @property
+    def center_crop_calibrating(self) -> bool:
+        """True while the center-crop overlay is being calibrated."""
+        return self._center_crop_calibrating
+
+    @property
     def line_thickness(self) -> float:
         """Current line thickness for drawing polygons and overlays."""
         return self._line_thickness
