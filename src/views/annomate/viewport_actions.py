@@ -430,18 +430,21 @@ class ViewportActionsBar(QFrame):
         self._calib_status_lbl = QLabel("Current Calibration: None")
         layout.addWidget(self._calib_status_lbl)
 
-        # Ratio input: [ 1px ] : [ 0.05 ] [ mm▾ ] [ Apply ]
+        # Ratio input: [ 1 ] px : [ 0.05 ] [ mm▾ ] [ Apply ]
         ratio_row = QHBoxLayout()
         ratio_row.setSpacing(4)
-        self._ratio_px_edit = QLineEdit()
-        self._ratio_px_edit.setPlaceholderText("1px")
-        self._ratio_px_edit.setToolTip("Left side of ratio, e.g. 1px or 50px")
-        ratio_row.addWidget(self._ratio_px_edit)
-        ratio_row.addWidget(QLabel(":"))
-        self._ratio_val_num_edit = QLineEdit()
-        self._ratio_val_num_edit.setPlaceholderText("0.05")
-        self._ratio_val_num_edit.setToolTip("Numeric value for the right side of the ratio")
-        ratio_row.addWidget(self._ratio_val_num_edit)
+        self._ratio_px_spin = QSpinBox()
+        self._ratio_px_spin.setRange(1, 999999)
+        self._ratio_px_spin.setValue(1)
+        self._ratio_px_spin.setToolTip("Number of pixels on the left side of the ratio")
+        ratio_row.addWidget(self._ratio_px_spin)
+        ratio_row.addWidget(QLabel("px :"))
+        self._ratio_val_num_spin = QDoubleSpinBox()
+        self._ratio_val_num_spin.setRange(0.0, 999999.0)
+        self._ratio_val_num_spin.setDecimals(2)
+        self._ratio_val_num_spin.setSingleStep(0.1)
+        self._ratio_val_num_spin.setToolTip("Real-world value for the right side of the ratio")
+        ratio_row.addWidget(self._ratio_val_num_spin)
         self._ratio_unit_combo = QComboBox()
         for _u in ("mm", "um", "nm", "pm", "fm", "cm", "dm", "m", "km"):
             self._ratio_unit_combo.addItem(_u)
@@ -820,18 +823,13 @@ class ViewportActionsBar(QFrame):
     def _on_apply_ratio_clicked(self) -> None:
         if self._model is None:
             return
-        px_text = self._ratio_px_edit.text().strip()
-        val_num = self._ratio_val_num_edit.text().strip()
-        val_text = val_num + self._ratio_unit_combo.currentText()
-        if not px_text or not val_num:
+        px_count = self._ratio_px_spin.value()
+        world_val = self._ratio_val_num_spin.value()
+        unit = self._ratio_unit_combo.currentText()
+        if world_val <= 0:
+            QMessageBox.warning(self, "Invalid Ratio", "World value must be greater than zero.")
             return
-        from core.persistence.calibration_io import parse_ratio_string
-
-        try:
-            px_count, world_val, unit = parse_ratio_string(f"{px_text}:{val_text}")
-            self._model.apply_scale_direct(px_count, world_val, unit)
-        except ValueError as exc:
-            QMessageBox.warning(self, "Invalid Ratio", str(exc))
+        self._model.apply_scale_direct(px_count, world_val, unit)
 
     def _on_import_ratio_clicked(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1071,10 +1069,6 @@ class ViewportActionsBar(QFrame):
     def _refresh_calib_status(self) -> None:
         if self._model is None or not self._model.has_scale():
             self._calib_status_lbl.setText("Current Calibration: None")
-            if not self._ratio_px_edit.hasFocus():
-                self._ratio_px_edit.clear()
-            if not self._ratio_val_num_edit.hasFocus():
-                self._ratio_val_num_edit.clear()
             return
         from core.persistence.calibration_io import format_ratio_string
 
@@ -1083,11 +1077,10 @@ class ViewportActionsBar(QFrame):
         unit = self._model.unit()
         ratio_str = format_ratio_string(px_count, world_val, unit)
         self._calib_status_lbl.setText(f"Current Calibration: {ratio_str}")
-        left, _ = ratio_str.split(":", 1)
-        if not self._ratio_px_edit.hasFocus():
-            self._ratio_px_edit.setText(left)
-        if not self._ratio_val_num_edit.hasFocus():
-            self._ratio_val_num_edit.setText(f"{world_val:g}")
+        if not self._ratio_px_spin.hasFocus():
+            self._ratio_px_spin.setValue(int(round(px_count)))
+        if not self._ratio_val_num_spin.hasFocus():
+            self._ratio_val_num_spin.setValue(world_val)
             idx = self._ratio_unit_combo.findText(unit)
             if idx >= 0:
                 self._ratio_unit_combo.setCurrentIndex(idx)
