@@ -110,6 +110,10 @@ class ViewportActionsBar(QFrame):
         font.setPointSize(16)
         font.setBold(True)
 
+        font_large = QFont()
+        font_large.setPointSize(20)
+        font_large.setBold(True)
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(4)
@@ -124,8 +128,8 @@ class ViewportActionsBar(QFrame):
         self._btn_zoom_out.clicked.connect(canvas.zoom_out)
         layout.addWidget(self._btn_zoom_out)
 
-        self._btn_reset = self._make_button("⊙", "Reset View")
-        self._btn_reset.setFont(font)
+        self._btn_reset = self._make_button("⊡", "Reset View")
+        self._btn_reset.setFont(font_large)
         self._btn_reset.clicked.connect(canvas.reset_view)
         layout.addWidget(self._btn_reset)
 
@@ -139,15 +143,15 @@ class ViewportActionsBar(QFrame):
         )
         layout.addWidget(self._btn_measure)
 
-        self._btn_settings = self._make_popup_button("⚙", "Grid Settings")
-        self._btn_settings.setFont(font)
+        self._btn_settings = self._make_popup_button("⊞", "Grid Settings")
+        self._btn_settings.setFont(font_large)
         self._btn_settings.setMenu(self._build_settings_menu())
         layout.addWidget(self._btn_settings)
 
         self._add_divider(layout)
 
-        self._btn_crop = self._make_popup_button("⌗", "Center Crop")
-        self._btn_crop.setFont(font)
+        self._btn_crop = self._make_popup_button("⊕", "Center Crop")
+        self._btn_crop.setFont(font_large)
         self._btn_crop.setMenu(self._build_crop_menu())
         layout.addWidget(self._btn_crop)
 
