@@ -13,12 +13,13 @@ class AnomalyConstraintController(QObject):
             Args: (area_violations: set[int], distance_pairs: set[frozenset])
     """
 
-    violations_updated = Signal(set, set)
+    violations_updated = Signal(set, set, object)
 
     def __init__(self, model: AnomalyConstraintModel, parent=None) -> None:
         super().__init__(parent)
         self._model = model
         self._distance_cache: dict[tuple[int, int], float] = {}
+        self._last_scale: float | None = None
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -31,8 +32,10 @@ class AnomalyConstraintController(QObject):
             annotations: All annotation dicts for the currently displayed image.
             scale: World-units-per-pixel from CalibrationModel, or None if uncalibrated.
         """
+        self._last_scale = scale
+
         if not self._model.enabled():
-            self.violations_updated.emit(set(), set())
+            self.violations_updated.emit(set(), set(), {})
             return
 
         area_violations: set[int] = set()
@@ -54,7 +57,13 @@ class AnomalyConstraintController(QObject):
                 self._distance_cache,
             )
 
-        self.violations_updated.emit(area_violations, distance_pairs)
+        dist_values: dict[frozenset, float] = {}
+        for pair in distance_pairs:
+            i, j = sorted(pair)
+            dist_px = self._distance_cache.get((i, j), 0.0)
+            dist_values[pair] = dist_px * scale if scale is not None else dist_px
+
+        self.violations_updated.emit(area_violations, distance_pairs, dist_values)
 
     def invalidate_cache(self) -> None:
         """Clear the pairwise distance cache.

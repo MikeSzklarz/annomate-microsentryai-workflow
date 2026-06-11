@@ -125,6 +125,8 @@ class ImageLabel(QLabel):
         self._ai_overlays: List[List[QPointF]] = []
         self._anomaly_area_violations: set = set()
         self._anomaly_distance_pairs: set = set()
+        self._anomaly_dist_values: dict = {}
+        self._anomaly_dist_unit: str = "px"
         self._anomaly_area_color: tuple = (255, 165, 0)
         self._anomaly_dist_color: tuple = (220, 50, 50)
 
@@ -192,6 +194,7 @@ class ImageLabel(QLabel):
         self._ai_overlays = []
         self._anomaly_area_violations = set()
         self._anomaly_distance_pairs = set()
+        self._anomaly_dist_values = {}
         self._heatmap_pix = None
         self._heatmap_alpha = 0.0
         self.selected_polygon_idx = -1
@@ -496,15 +499,23 @@ class ImageLabel(QLabel):
         self,
         area_violations: set,
         distance_pairs: set,
+        dist_values: dict | None = None,
     ) -> None:
         """Update which annotations to highlight as constraint violations.
 
         Args:
             area_violations: Set of annotation indices whose area exceeds the threshold.
             distance_pairs: Set of frozensets ``{i, j}`` for pairs that are too close.
+            dist_values: Optional mapping of each pair frozenset to its world-unit distance.
         """
         self._anomaly_area_violations = area_violations
         self._anomaly_distance_pairs = distance_pairs
+        self._anomaly_dist_values = dist_values or {}
+        self.update()
+
+    def set_violation_unit(self, unit: str) -> None:
+        """Set the distance unit label shown on proximity violation lines."""
+        self._anomaly_dist_unit = unit
         self.update()
 
     def set_violation_colors(self, area_color: tuple, distance_color: tuple) -> None:
@@ -1244,10 +1255,12 @@ class ImageLabel(QLabel):
             color = QColor(ar, ag, ab)
             f = painter.font()
             f.setBold(True)
-            f.setPointSizeF(max(6.0, 20.0 / self._zoom))
+            font_pts = max(6.0, 20.0 / self._zoom)
+            f.setPointSizeF(font_pts)
             painter.setFont(f)
             painter.setPen(QPen(color))
-            half = 15.0 / self._zoom
+            # Box must expand with the font when zoom clips it below its natural size
+            half = max(15.0 / self._zoom, font_pts * 2.0)
             for idx in self._anomaly_area_violations:
                 if idx < len(self._overlays):
                     pts, _color, _thick, visible = self._overlays[idx]
@@ -1262,7 +1275,8 @@ class ImageLabel(QLabel):
 
         if self._anomaly_distance_pairs:
             dr, dg, db = self._anomaly_dist_color
-            dist_pen = QPen(QColor(dr, dg, db, 200), 2.0 / self._zoom, Qt.DashLine)
+            dist_color = QColor(dr, dg, db, 200)
+            dist_pen = QPen(dist_color, 2.0 / self._zoom, Qt.DashLine)
             painter.setPen(dist_pen)
             for pair in self._anomaly_distance_pairs:
                 idxs = list(pair)
@@ -1280,6 +1294,35 @@ class ImageLabel(QLabel):
                 cx_j = sum(p.x() for p in pts_j) / len(pts_j)
                 cy_j = sum(p.y() for p in pts_j) / len(pts_j)
                 painter.drawLine(QPointF(cx_i, cy_i), QPointF(cx_j, cy_j))
+
+                dist_val = self._anomaly_dist_values.get(pair)
+                if dist_val is None:
+                    continue
+                label = f"{dist_val:.4g}{self._anomaly_dist_unit}"
+                lf = painter.font()
+                lf.setBold(True)
+                lfont_pts = max(5.0, 11.0 / self._zoom)
+                lf.setPointSizeF(lfont_pts)
+                painter.setFont(lf)
+                painter.setPen(QPen(QColor(dr, dg, db)))
+                mx = (cx_i + cx_j) / 2
+                my = (cy_i + cy_j) / 2
+                dx = cx_j - cx_i
+                dy = cy_j - cy_i
+                # Box grows with the font when zoom pushes font past its natural size
+                box_w = max(55.0 / self._zoom, lfont_pts * 8.0)
+                box_h = max(14.0 / self._zoom, lfont_pts * 2.0)
+                # Near-vertical line: shift label right so it doesn't overlap
+                if abs(dy) > abs(dx):
+                    x0 = mx + 4.0 / self._zoom
+                else:
+                    x0 = mx - box_w / 2
+                painter.drawText(
+                    QRectF(x0, my - box_h / 2, box_w, box_h),
+                    Qt.AlignCenter,
+                    label,
+                )
+                painter.setPen(dist_pen)
 
     def _paint_calib_dots(self, painter: QPainter) -> None:
         """Draw calibration and measure dots in display coords (inside scaled painter)."""

@@ -975,8 +975,10 @@ class AnnoMateWindow(QWidget):
         self.canvas.set_active_color(QColor(r, g, b))
         self.status_bar.set_class(name)
 
-    def _on_anomaly_violations_updated(self, area_violations: set, distance_pairs: set) -> None:
-        self.canvas.set_violation_highlights(area_violations, distance_pairs)
+    def _on_anomaly_violations_updated(
+        self, area_violations: set, distance_pairs: set, dist_values: dict
+    ) -> None:
+        self.canvas.set_violation_highlights(area_violations, distance_pairs, dist_values)
         self.viewport_actions.refresh_anomaly_violations(
             len(area_violations), len(distance_pairs)
         )
@@ -994,7 +996,9 @@ class AnnoMateWindow(QWidget):
 
     def _on_calibration_changed_for_anomaly(self) -> None:
         if self._calib_model is not None:
-            self.viewport_actions.update_anomaly_units(self._calib_model.unit())
+            unit = self._calib_model.unit()
+            self.viewport_actions.update_anomaly_units(unit)
+            self.canvas.set_violation_unit(unit)
         self._run_anomaly_checks()
 
     def _run_anomaly_checks(self) -> None:
