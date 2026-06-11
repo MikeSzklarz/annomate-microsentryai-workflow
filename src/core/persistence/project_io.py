@@ -232,6 +232,91 @@ class ProjectIO:
         logger.debug("Project saved to: %s", annoproj_path)
         return annoproj_path
 
+    def export_template(
+        self,
+        template_path: str,
+        project_name: str,
+        dataset_state,
+        calibration_state=None,
+        center_template_state=None,
+        anomaly_constraint_state=None,
+    ) -> str:
+        """Write a settings-only .annoproj template (no images, annotations, or inference).
+
+        The written file carries is_template=true and omits image_dir, annotations_file,
+        per_image, and inference sections. It can be opened with load_project/
+        apply_project_to_states — missing sections are handled gracefully by the loader.
+
+        Args:
+            template_path: Absolute path for the output .annoproj file.
+            project_name: Human-readable name embedded in the template.
+            dataset_state: DatasetState (only class_names/class_colors are used).
+            calibration_state: CalibrationState or None.
+            center_template_state: CenterTemplateState or None.
+            anomaly_constraint_state: AnomalyConstraintState or None.
+
+        Returns:
+            The absolute path to the written file.
+        """
+        template_path = str(Path(template_path).resolve())
+        template_dir = str(Path(template_path).parent)
+        os.makedirs(template_dir, exist_ok=True)
+
+        tmpl = {
+            "version": _SCHEMA_VERSION,
+            "is_template": True,
+            "project_name": project_name,
+            "dataset": {
+                "class_names": list(dataset_state.class_names),
+                "class_colors": {
+                    name: list(rgb) for name, rgb in dataset_state.class_colors.items()
+                },
+            },
+        }
+
+        if calibration_state is not None:
+            cs = calibration_state
+            tmpl["calibration"] = {
+                "scale": cs.scale,
+                "unit": cs.unit,
+                "px_count": cs.px_count,
+                "world_val": cs.world_val,
+                "user_calibrated": cs.user_calibrated,
+                "calib_p1": list(cs.calib_p1) if cs.calib_p1 else None,
+                "calib_p2": list(cs.calib_p2) if cs.calib_p2 else None,
+                "real_distance": cs.real_distance,
+                "grid_visible": cs.grid_visible,
+                "grid_color": list(cs.grid_color),
+                "grid_opacity": cs.grid_opacity,
+                "grid_spacing_world": cs.grid_spacing_world,
+                "grid_spacing_auto": cs.grid_spacing_auto,
+            }
+
+        if center_template_state is not None:
+            ts = center_template_state
+            tmpl["center_template"] = {
+                "enabled": ts.enabled,
+                "template_file": self._as_relative_path(
+                    ts.template_path or ts.template_file, template_dir
+                ),
+                "anchor_x": ts.anchor_x,
+                "anchor_y": ts.anchor_y,
+                "crop_shape": ts.crop_shape,
+                "crop_width": ts.crop_width,
+                "crop_height": ts.crop_height,
+                "center_x": ts.center_x,
+                "center_y": ts.center_y,
+            }
+
+        if anomaly_constraint_state is not None:
+            tmpl["anomaly_constraints"] = anomaly_constraint_state.to_dict()
+
+        with open(template_path, "w", encoding="utf-8") as f:
+            json.dump(tmpl, f, indent=2)
+
+        logger.debug("Project template exported to: %s", template_path)
+        return template_path
+
     # ------------------------------------------------------------------ #
     # Load
     # ------------------------------------------------------------------ #

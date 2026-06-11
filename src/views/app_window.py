@@ -146,6 +146,8 @@ class AppWindow(QMainWindow):
         add(data_menu, "Export Binary Masks…", "", self._export_binary_masks)
         add(data_menu, "Export CSV…", "", self._export_csv)
         add(data_menu, "Export Train Structure…", "", self._export_train_structure)
+        data_menu.addSeparator()
+        add(data_menu, "Export Project Template…", "", self._export_project_template)
 
     def _refresh_project_start_state(self) -> None:
         """Refresh recent-action shortcuts on the empty project start screen."""
@@ -418,6 +420,23 @@ class AppWindow(QMainWindow):
         try:
             msg = self.io_controller.export_train_structure(out_dir)
             QMessageBox.information(self, "Export Train Structure", msg)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+
+    def _export_project_template(self) -> None:
+        out_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Project Template",
+            os.path.join(self._export_start_dir(), "template.annoproj"),
+            "AnnoMate Project (*.annoproj)",
+        )
+        if not out_path:
+            return
+        from pathlib import Path
+        template_name = Path(out_path).stem
+        try:
+            msg = self.project_controller.export_template(out_path, template_name)
+            QMessageBox.information(self, "Export Project Template", msg)
         except Exception as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
 

@@ -197,6 +197,7 @@ class ProjectController(QObject):
         """
         project_data = self._project_io.load_project(annoproj_path)
         image_dir = project_data.get("dataset", {}).get("image_dir", "")
+        is_template = project_data.get("is_template", False)
         warnings: List[str] = []
 
         self._loading = True
@@ -204,7 +205,11 @@ class ProjectController(QObject):
             ds = self._dataset_model.state
             ds.clear()
 
-            if image_dir and os.path.isdir(image_dir):
+            if is_template:
+                ds.image_dir = ""
+                ds.image_files = []
+                self._inference_model.state.clear()
+            elif image_dir and os.path.isdir(image_dir):
                 files = sorted(
                     f
                     for f in os.listdir(image_dir)
@@ -268,13 +273,17 @@ class ProjectController(QObject):
                 "They will be dropped on the next save."
             )
 
-        self._project_dir = str(Path(annoproj_path).parent)
+        if is_template:
+            self._project_dir = None
+            self._autosave_manager.stop()
+        else:
+            self._project_dir = str(Path(annoproj_path).parent)
+            self._autosave_manager.set_project_dir(self._project_dir)
         self._project_name = project_data.get("project_name", Path(annoproj_path).stem)
         self._created_at = project_data.get("created_at")
         self._last_project_model_path = project_data.get("inference", {}).get(
             "model_path", ""
         )
-        self._autosave_manager.set_project_dir(self._project_dir)
         self.clear_dirty()
         self.project_opened.emit(self._project_name)
 
@@ -429,6 +438,33 @@ class ProjectController(QObject):
             self._loading = False
 
         self.mark_dirty()
+
+    # ------------------------------------------------------------------ #
+    # Template export
+    # ------------------------------------------------------------------ #
+
+    def export_template(self, output_path: str, template_name: str) -> str:
+        """Export a settings-only .annoproj template and return a status message."""
+        calib_state = (
+            self._calibration_model._state if self._calibration_model else None
+        )
+        center_template_state = (
+            self._center_template_model._state if self._center_template_model else None
+        )
+        anomaly_constraint_state = (
+            self._anomaly_constraint_model._state
+            if self._anomaly_constraint_model
+            else None
+        )
+        self._project_io.export_template(
+            template_path=output_path,
+            project_name=template_name,
+            dataset_state=self._dataset_model.state,
+            calibration_state=calib_state,
+            center_template_state=center_template_state,
+            anomaly_constraint_state=anomaly_constraint_state,
+        )
+        return f"Template exported to:\n{output_path}"
 
     # ------------------------------------------------------------------ #
     # COCO standalone export
