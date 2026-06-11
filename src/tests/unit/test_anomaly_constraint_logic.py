@@ -246,23 +246,29 @@ class TestAnomalyConstraintStateSerialization:
         assert loaded.enabled == s.enabled
         assert loaded.area_check_enabled == s.area_check_enabled
         assert loaded.area_threshold == s.area_threshold
+        assert loaded.area_color == s.area_color
         assert loaded.distance_check_enabled == s.distance_check_enabled
         assert loaded.distance_threshold == s.distance_threshold
         assert loaded.distance_method == s.distance_method
+        assert loaded.distance_color == s.distance_color
 
     def test_round_trip_custom(self):
         """Custom values survive serialisation."""
         s = AnomalyConstraintState(
             enabled=True,
             area_threshold=250.5,
+            area_color=(100, 200, 50),
             distance_threshold=30.0,
             distance_method="edge",
+            distance_color=(10, 20, 200),
         )
         loaded = AnomalyConstraintState.from_dict(s.to_dict())
         assert loaded.enabled is True
         assert loaded.area_threshold == pytest.approx(250.5)
+        assert loaded.area_color == (100, 200, 50)
         assert loaded.distance_threshold == pytest.approx(30.0)
         assert loaded.distance_method == "edge"
+        assert loaded.distance_color == (10, 20, 200)
 
     def test_from_dict_missing_keys(self):
         """Missing keys fall back to defaults without raising."""
@@ -270,3 +276,5 @@ class TestAnomalyConstraintStateSerialization:
         assert loaded.enabled is False
         assert loaded.area_threshold == 0.0
         assert loaded.distance_method == "centroid"
+        assert loaded.area_color == (255, 165, 0)
+        assert loaded.distance_color == (220, 50, 50)

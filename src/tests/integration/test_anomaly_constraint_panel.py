@@ -47,43 +47,62 @@ class TestAnomalyPanelWidgets:
         assert hasattr(bar, "_anomaly_area_chk")
         assert hasattr(bar, "_anomaly_area_spin")
         assert hasattr(bar, "_anomaly_area_unit_lbl")
+        assert hasattr(bar, "_anomaly_area_count_lbl")
         assert hasattr(bar, "_anomaly_dist_chk")
         assert hasattr(bar, "_anomaly_dist_spin")
         assert hasattr(bar, "_anomaly_dist_unit_lbl")
+        assert hasattr(bar, "_anomaly_dist_count_lbl")
         assert hasattr(bar, "_anomaly_centroid_radio")
         assert hasattr(bar, "_anomaly_edge_radio")
-        assert hasattr(bar, "_anomaly_status_lbl")
 
     def test_default_units_are_pixels(self, bar):
         """Without calibration, unit labels default to 'px' and 'px²'."""
         assert bar._anomaly_area_unit_lbl.text() == "px²"
         assert bar._anomaly_dist_unit_lbl.text() == "px"
 
+    def test_color_swatch_buttons_exist(self, bar):
+        """Color picker swatch buttons are present for area and distance."""
+        assert hasattr(bar, "_anomaly_area_color_btn")
+        assert hasattr(bar, "_anomaly_dist_color_btn")
+
+    def test_color_swatch_reflects_model_color(self, bar, anomaly_model, qtbot):
+        """Changing the model's area_color updates the swatch button stylesheet."""
+        anomaly_model.set_area_color((10, 20, 30))
+        style = bar._anomaly_area_color_btn.styleSheet()
+        assert "10" in style and "20" in style and "30" in style
+
 
 class TestRefreshAnomalyViolations:
-    def test_no_violations_message(self, bar):
-        """refresh_anomaly_violations(0, 0) sets a 'no violations' style label."""
+    def test_no_violations_clears_labels(self, bar, anomaly_model):
+        """refresh_anomaly_violations(0, 0) clears both inline count labels."""
         bar.refresh_anomaly_violations(0, 0)
-        assert "No violations" in bar._anomaly_status_lbl.text()
+        assert bar._anomaly_area_count_lbl.text() == ""
+        assert bar._anomaly_dist_count_lbl.text() == ""
 
-    def test_violation_counts_shown(self, bar):
-        """refresh_anomaly_violations(2, 3) reflects counts in the status label."""
-        bar.refresh_anomaly_violations(2, 3)
-        text = bar._anomaly_status_lbl.text()
+    def test_area_violations_shown_with_threshold(self, bar, anomaly_model):
+        """refresh_anomaly_violations(2, 0) shows count and threshold in area label."""
+        anomaly_model.set_area_threshold(100.0)
+        bar.refresh_anomaly_violations(2, 0)
+        text = bar._anomaly_area_count_lbl.text()
         assert "2" in text
+        assert "100" in text
+        assert bar._anomaly_dist_count_lbl.text() == ""
+
+    def test_distance_violations_shown_with_threshold(self, bar, anomaly_model):
+        """refresh_anomaly_violations(0, 3) shows count and threshold in distance label."""
+        anomaly_model.set_distance_threshold(30.0)
+        bar.refresh_anomaly_violations(0, 3)
+        text = bar._anomaly_dist_count_lbl.text()
         assert "3" in text
+        assert "30" in text
+        assert bar._anomaly_area_count_lbl.text() == ""
 
-    def test_area_only_violations(self, bar):
-        """refresh_anomaly_violations(1, 0) mentions area but not proximity."""
+    def test_singular_defect_label(self, bar, anomaly_model):
+        """A count of 1 uses 'defect' (singular) in the label."""
+        anomaly_model.set_area_threshold(50.0)
         bar.refresh_anomaly_violations(1, 0)
-        text = bar._anomaly_status_lbl.text()
-        assert "area" in text.lower()
-
-    def test_distance_only_violations(self, bar):
-        """refresh_anomaly_violations(0, 2) mentions proximity but not area."""
-        bar.refresh_anomaly_violations(0, 2)
-        text = bar._anomaly_status_lbl.text()
-        assert "proximity" in text.lower()
+        assert "defect" in bar._anomaly_area_count_lbl.text()
+        assert "defects" not in bar._anomaly_area_count_lbl.text()
 
 
 class TestUpdateAnomalyUnits:

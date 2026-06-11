@@ -125,6 +125,8 @@ class ImageLabel(QLabel):
         self._ai_overlays: List[List[QPointF]] = []
         self._anomaly_area_violations: set = set()
         self._anomaly_distance_pairs: set = set()
+        self._anomaly_area_color: tuple = (255, 165, 0)
+        self._anomaly_dist_color: tuple = (220, 50, 50)
 
         # --- UI State Trackers ---
         self.selected_polygon_idx: int = -1
@@ -503,6 +505,12 @@ class ImageLabel(QLabel):
         """
         self._anomaly_area_violations = area_violations
         self._anomaly_distance_pairs = distance_pairs
+        self.update()
+
+    def set_violation_colors(self, area_color: tuple, distance_color: tuple) -> None:
+        """Update the colors used to render violation highlights."""
+        self._anomaly_area_color = area_color
+        self._anomaly_dist_color = distance_color
         self.update()
 
     def set_ai_overlays(self, contours: List[List[Tuple[float, float]]]) -> None:
@@ -1232,7 +1240,8 @@ class ImageLabel(QLabel):
         painter.setBrush(Qt.NoBrush)
 
         if self._anomaly_area_violations:
-            area_pen = QPen(QColor(255, 165, 0), 3.0 / self._zoom)
+            ar, ag, ab = self._anomaly_area_color
+            area_pen = QPen(QColor(ar, ag, ab), 3.0 / self._zoom)
             painter.setPen(area_pen)
             for idx in self._anomaly_area_violations:
                 if idx < len(self._overlays):
@@ -1241,7 +1250,8 @@ class ImageLabel(QLabel):
                         painter.drawPolygon(QPolygonF(pts + [pts[0]]))
 
         if self._anomaly_distance_pairs:
-            dist_pen = QPen(QColor(220, 50, 50, 200), 2.0 / self._zoom, Qt.DashLine)
+            dr, dg, db = self._anomaly_dist_color
+            dist_pen = QPen(QColor(dr, dg, db, 200), 2.0 / self._zoom, Qt.DashLine)
             painter.setPen(dist_pen)
             for pair in self._anomaly_distance_pairs:
                 idxs = list(pair)

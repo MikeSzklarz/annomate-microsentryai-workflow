@@ -38,6 +38,12 @@ class AnomalyConstraintModel(QObject):
     def distance_method(self) -> str:
         return self._state.distance_method
 
+    def area_color(self) -> tuple:
+        return self._state.area_color
+
+    def distance_color(self) -> tuple:
+        return self._state.distance_color
+
     # ------------------------------------------------------------------ #
     # Command API
     # ------------------------------------------------------------------ #
@@ -76,6 +82,18 @@ class AnomalyConstraintModel(QObject):
         if self._state.distance_method == v:
             return
         self._state.distance_method = v
+        self.constraints_changed.emit()
+
+    def set_area_color(self, v: tuple) -> None:
+        if self._state.area_color == v:
+            return
+        self._state.area_color = v
+        self.constraints_changed.emit()
+
+    def set_distance_color(self, v: tuple) -> None:
+        if self._state.distance_color == v:
+            return
+        self._state.distance_color = v
         self.constraints_changed.emit()
 
     # ------------------------------------------------------------------ #

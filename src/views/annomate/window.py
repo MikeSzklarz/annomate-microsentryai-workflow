@@ -986,6 +986,10 @@ class AnnoMateWindow(QWidget):
         if new_method != self._prev_distance_method:
             self._anomaly_controller.invalidate_cache()
             self._prev_distance_method = new_method
+        self.canvas.set_violation_colors(
+            self._anomaly_model.area_color(),
+            self._anomaly_model.distance_color(),
+        )
         self._run_anomaly_checks()
 
     def _on_calibration_changed_for_anomaly(self) -> None:

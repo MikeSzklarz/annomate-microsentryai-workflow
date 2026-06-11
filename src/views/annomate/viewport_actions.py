@@ -246,6 +246,21 @@ class ViewportActionsBar(QFrame):
         area_row.addWidget(self._anomaly_area_unit_lbl)
         layout.addLayout(area_row)
 
+        area_color_row = QHBoxLayout()
+        area_color_row.setSpacing(4)
+        area_color_row.addWidget(QLabel("Outline Color:"))
+        self._anomaly_area_color_btn = QPushButton()
+        self._anomaly_area_color_btn.setFixedSize(24, 20)
+        self._anomaly_area_color_btn.setToolTip("Choose area violation outline color")
+        self._apply_color_swatch(self._anomaly_area_color_btn, (255, 165, 0))
+        area_color_row.addWidget(self._anomaly_area_color_btn)
+        area_color_row.addStretch()
+        layout.addLayout(area_color_row)
+
+        self._anomaly_area_count_lbl = QLabel("")
+        self._anomaly_area_count_lbl.setStyleSheet("color: #cc4400; font-weight: bold;")
+        layout.addWidget(self._anomaly_area_count_lbl)
+
         # ── Distance threshold section ──────────────────────────────────
         div2 = QFrame()
         div2.setFrameShape(QFrame.HLine)
@@ -289,24 +304,30 @@ class ViewportActionsBar(QFrame):
         dist_row.addWidget(self._anomaly_dist_unit_lbl)
         layout.addLayout(dist_row)
 
-        # ── Status line ────────────────────────────────────────────────
-        div3 = QFrame()
-        div3.setFrameShape(QFrame.HLine)
-        div3.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(div3)
+        dist_color_row = QHBoxLayout()
+        dist_color_row.setSpacing(4)
+        dist_color_row.addWidget(QLabel("Line Color:"))
+        self._anomaly_dist_color_btn = QPushButton()
+        self._anomaly_dist_color_btn.setFixedSize(24, 20)
+        self._anomaly_dist_color_btn.setToolTip("Choose proximity violation line color")
+        self._apply_color_swatch(self._anomaly_dist_color_btn, (220, 50, 50))
+        dist_color_row.addWidget(self._anomaly_dist_color_btn)
+        dist_color_row.addStretch()
+        layout.addLayout(dist_color_row)
 
-        self._anomaly_status_lbl = QLabel("No violations detected")
-        self._anomaly_status_lbl.setStyleSheet("color: grey; font-style: italic;")
-        self._anomaly_status_lbl.setWordWrap(True)
-        layout.addWidget(self._anomaly_status_lbl)
+        self._anomaly_dist_count_lbl = QLabel("")
+        self._anomaly_dist_count_lbl.setStyleSheet("color: #cc4400; font-weight: bold;")
+        layout.addWidget(self._anomaly_dist_count_lbl)
 
         # ── Wire signals ───────────────────────────────────────────────
         self._anomaly_enable_chk.toggled.connect(self._on_anomaly_enable_toggled)
         self._anomaly_area_chk.toggled.connect(self._on_anomaly_area_check_toggled)
         self._anomaly_area_spin.valueChanged.connect(self._on_anomaly_area_changed)
+        self._anomaly_area_color_btn.clicked.connect(self._on_anomaly_area_color_clicked)
         self._anomaly_dist_chk.toggled.connect(self._on_anomaly_dist_check_toggled)
         self._anomaly_dist_spin.valueChanged.connect(self._on_anomaly_dist_changed)
         self._anomaly_centroid_radio.toggled.connect(self._on_anomaly_method_changed)
+        self._anomaly_dist_color_btn.clicked.connect(self._on_anomaly_dist_color_clicked)
 
         action.setDefaultWidget(panel)
         menu.addAction(action)
@@ -337,6 +358,31 @@ class ViewportActionsBar(QFrame):
             method = "centroid" if centroid_checked else "edge"
             self._anomaly_model.set_distance_method(method)
 
+    def _on_anomaly_area_color_clicked(self) -> None:
+        if self._anomaly_model is None:
+            return
+        r, g, b = self._anomaly_model.area_color()
+        color = QColorDialog.getColor(QColor(r, g, b), self, "Area Violation Color")
+        if color.isValid():
+            self._anomaly_model.set_area_color((color.red(), color.green(), color.blue()))
+
+    def _on_anomaly_dist_color_clicked(self) -> None:
+        if self._anomaly_model is None:
+            return
+        r, g, b = self._anomaly_model.distance_color()
+        color = QColorDialog.getColor(QColor(r, g, b), self, "Proximity Line Color")
+        if color.isValid():
+            self._anomaly_model.set_distance_color(
+                (color.red(), color.green(), color.blue())
+            )
+
+    def _apply_color_swatch(self, btn, rgb: tuple) -> None:
+        r, g, b = rgb
+        btn.setStyleSheet(
+            f"QPushButton {{ background-color: rgb({r},{g},{b}); "
+            f"border: 1px solid #888; border-radius: 2px; }}"
+        )
+
     def _refresh_anomaly_controls(self) -> None:
         if not hasattr(self, "_anomaly_enable_chk"):
             return
@@ -346,6 +392,9 @@ class ViewportActionsBar(QFrame):
         self._anomaly_enable_chk.setChecked(self._anomaly_model.enabled())
         self._anomaly_area_chk.setChecked(self._anomaly_model.area_check_enabled())
         self._anomaly_area_spin.setValue(self._anomaly_model.area_threshold())
+        self._apply_color_swatch(
+            self._anomaly_area_color_btn, self._anomaly_model.area_color()
+        )
         self._anomaly_dist_chk.setChecked(self._anomaly_model.distance_check_enabled())
         self._anomaly_dist_spin.setValue(self._anomaly_model.distance_threshold())
         self._anomaly_centroid_radio.setChecked(
@@ -353,6 +402,9 @@ class ViewportActionsBar(QFrame):
         )
         self._anomaly_edge_radio.setChecked(
             self._anomaly_model.distance_method() == "edge"
+        )
+        self._apply_color_swatch(
+            self._anomaly_dist_color_btn, self._anomaly_model.distance_color()
         )
         self._refreshing = False
 
@@ -688,20 +740,29 @@ class ViewportActionsBar(QFrame):
         self._refresh_anomaly_controls()
 
     def refresh_anomaly_violations(self, area_count: int, dist_count: int) -> None:
-        """Update the status line in the anomaly panel with current violation counts."""
-        if not hasattr(self, "_anomaly_status_lbl"):
+        """Update the inline violation count labels with threshold-aware text."""
+        if not hasattr(self, "_anomaly_area_count_lbl"):
             return
-        if area_count == 0 and dist_count == 0:
-            self._anomaly_status_lbl.setText("No violations detected")
-            self._anomaly_status_lbl.setStyleSheet("color: grey; font-style: italic;")
+
+        if area_count > 0 and self._anomaly_model is not None:
+            t = self._anomaly_model.area_threshold()
+            unit = self._anomaly_area_unit_lbl.text()
+            label = "defect" if area_count == 1 else "defects"
+            self._anomaly_area_count_lbl.setText(
+                f"{area_count} {label} > {t:g}{unit}"
+            )
         else:
-            parts = []
-            if area_count:
-                parts.append(f"{area_count} area")
-            if dist_count:
-                parts.append(f"{dist_count} proximity")
-            self._anomaly_status_lbl.setText(", ".join(parts) + " violation(s)")
-            self._anomaly_status_lbl.setStyleSheet("color: #cc4400; font-style: normal; font-weight: bold;")
+            self._anomaly_area_count_lbl.setText("")
+
+        if dist_count > 0 and self._anomaly_model is not None:
+            t = self._anomaly_model.distance_threshold()
+            unit = self._anomaly_dist_unit_lbl.text()
+            label = "defect" if dist_count == 1 else "defects"
+            self._anomaly_dist_count_lbl.setText(
+                f"{dist_count} {label} within {t:g}{unit}"
+            )
+        else:
+            self._anomaly_dist_count_lbl.setText("")
 
     def update_anomaly_units(self, unit: str) -> None:
         """Update the unit labels in the anomaly panel (called when calibration changes)."""
