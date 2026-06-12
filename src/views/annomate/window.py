@@ -464,7 +464,7 @@ class AnnoMateWindow(QWidget):
         self.canvas.image_loaded.connect(self.status_bar.set_dimensions)
 
         # Right panel
-        self.right_panel.image_selected.connect(self._load_row)
+        self.right_panel.image_selected.connect(self._navigate_to)
         self.right_panel.class_selected.connect(self._set_active_class)
         self.right_panel.prev_requested.connect(self._prev_image)
         self.right_panel.next_requested.connect(self._next_image)
@@ -727,12 +727,51 @@ class AnnoMateWindow(QWidget):
     def _prev_image(self) -> None:
         row = self.right_panel.navigator_adjacent_source_row(self._current_row, -1)
         if row >= 0:
-            self._load_row(row)
+            self._navigate_to(row)
 
     def _next_image(self) -> None:
         row = self.right_panel.navigator_adjacent_source_row(self._current_row, 1)
         if row >= 0:
-            self._load_row(row)
+            self._navigate_to(row)
+
+    def _navigate_to(self, row: int) -> None:
+        """Navigate to *row*, prompting if the current image has unresolved review state."""
+        if self._current_row >= 0 and row != self._current_row:
+            warning = self.dataset_model.get_navigation_warning(self._current_row)
+            if warning == "no_decision":
+                reply = QMessageBox.warning(
+                    self,
+                    "No Decision Made",
+                    "This image has annotations but no Accept or Reject decision was made.\n\n"
+                    "Press OK to continue (image will be marked as Omitted), "
+                    "or Cancel to stay and make a decision.",
+                    QMessageBox.Ok | QMessageBox.Cancel,
+                    QMessageBox.Cancel,
+                )
+                if reply == QMessageBox.Ok:
+                    self.dataset_model.set_review_decision(
+                        self._current_row, "omitted", "no_decision"
+                    )
+                else:
+                    return
+            elif warning == "no_annotation":
+                reply = QMessageBox.warning(
+                    self,
+                    "No Annotations",
+                    "This image has been marked as rejected but has no annotations.\n"
+                    "Rejections should include annotations identifying the issue.\n\n"
+                    "Press OK to continue (image will be marked as Omitted), "
+                    "or Cancel to stay and annotate.",
+                    QMessageBox.Ok | QMessageBox.Cancel,
+                    QMessageBox.Cancel,
+                )
+                if reply == QMessageBox.Ok:
+                    self.dataset_model.set_review_decision(
+                        self._current_row, "omitted", "no_annotation"
+                    )
+                else:
+                    return
+        self._load_row(row)
 
     # ------------------------------------------------------------------ #
     # Tool slots
