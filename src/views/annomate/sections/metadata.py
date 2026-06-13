@@ -1,4 +1,7 @@
 from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QListWidget,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -114,9 +117,36 @@ class MetadataSection(QWidget):
         name = self._inspector_edit.text().strip() or self._session_inspector
         if not name:
             return
-        for row in range(self.dataset_model.rowCount()):
-            if self.dataset_model.is_reviewed(row) and not self.dataset_model.get_inspector(row):
-                self.dataset_model.set_inspector(row, name)
+
+        rows_to_update = [
+            row for row in range(self.dataset_model.rowCount())
+            if self.dataset_model.is_reviewed(row) and not self.dataset_model.get_inspector(row)
+        ]
+        if not rows_to_update:
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Set Inspector")
+        dlg_layout = QVBoxLayout(dialog)
+        dlg_layout.addWidget(
+            QLabel(f'Set inspector to "{name}" for {len(rows_to_update)} reviewed image(s):')
+        )
+
+        list_widget = QListWidget()
+        for row in rows_to_update:
+            list_widget.addItem(self.dataset_model.data(self.dataset_model.index(row, 0)))
+        dlg_layout.addWidget(list_widget)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        dlg_layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        for row in rows_to_update:
+            self.dataset_model.set_inspector(row, name)
         self._load_fields()
 
     def _store_inspector(self) -> None:
