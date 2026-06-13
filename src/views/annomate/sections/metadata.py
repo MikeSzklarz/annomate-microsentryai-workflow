@@ -47,6 +47,9 @@ class MetadataSection(QWidget):
 
         self._set_inspector_btn = QPushButton("Set Inspector")
         self._set_inspector_btn.setFixedWidth(95)
+        self._set_inspector_btn.setToolTip(
+            "Set as session inspector - auto-fills new images as you navigate"
+        )
         self._set_inspector_btn.clicked.connect(self._on_set_inspector)
         inspector_row.addWidget(self._set_inspector_btn)
 
