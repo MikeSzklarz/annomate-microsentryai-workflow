@@ -1,7 +1,10 @@
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
-    QListWidget,
+    QHeaderView,
+    QTreeWidget,
+    QTreeWidgetItem,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -10,6 +13,101 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTextEdit,
 )
+
+
+class _SetAllInspectorDialog(QDialog):
+    """Dialog for bulk-assigning an inspector name across a filtered set of images."""
+
+    _FILTER_ALL = "All Images"
+    _FILTER_REVIEWED = "Reviewed"
+    _FILTER_IN_REVIEW = "In Review"
+
+    def __init__(self, dataset_model, prefill_name: str, parent=None) -> None:
+        super().__init__(parent)
+        self.dataset_model = dataset_model
+        self.setWindowTitle("Set All Inspectors")
+        self.setModal(True)
+        self.setMinimumWidth(420)
+        self.setMinimumHeight(320)
+        self._build_ui(prefill_name)
+        self._refresh_list()
+        self._update_ok_state()
+
+    def _build_ui(self, prefill_name: str) -> None:
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        name_row = QHBoxLayout()
+        name_row.setSpacing(6)
+        name_row.addWidget(QLabel("Inspector name:"))
+        self._name_edit = QLineEdit()
+        self._name_edit.setText(prefill_name)
+        self._name_edit.setPlaceholderText("Input Inspector Name")
+        self._name_edit.textChanged.connect(self._update_ok_state)
+        name_row.addWidget(self._name_edit, stretch=1)
+        layout.addLayout(name_row)
+
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(6)
+        filter_row.addWidget(QLabel("Apply to:"))
+        self._filter_combo = QComboBox()
+        self._filter_combo.addItems(
+            [self._FILTER_ALL, self._FILTER_REVIEWED, self._FILTER_IN_REVIEW]
+        )
+        self._filter_combo.currentIndexChanged.connect(self._refresh_list)
+        filter_row.addWidget(self._filter_combo, stretch=1)
+        layout.addLayout(filter_row)
+
+        self._summary_lbl = QLabel("0 image(s) will be updated")
+        layout.addWidget(self._summary_lbl)
+
+        self._tree = QTreeWidget()
+        self._tree.setColumnCount(2)
+        self._tree.setHeaderLabels(["Image", "Current Inspector"])
+        self._tree.setRootIsDecorated(False)
+        self._tree.setAlternatingRowColors(True)
+        self._tree.setEditTriggers(QTreeWidget.NoEditTriggers)
+        self._tree.setSortingEnabled(False)
+        header = self._tree.header()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
+        self._tree.setColumnWidth(1, 140)
+        layout.addWidget(self._tree, stretch=1)
+
+        self._buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self._ok_btn = self._buttons.button(QDialogButtonBox.Ok)
+        self._buttons.accepted.connect(self.accept)
+        self._buttons.rejected.connect(self.reject)
+        layout.addWidget(self._buttons)
+
+    def _get_filtered_rows(self) -> list[int]:
+        model = self.dataset_model
+        total = model.rowCount()
+        sel = self._filter_combo.currentText()
+        if sel == self._FILTER_REVIEWED:
+            return [r for r in range(total) if model.is_reviewed(r)]
+        if sel == self._FILTER_IN_REVIEW:
+            return [r for r in range(total) if model.get_review_decision(r) is None]
+        return list(range(total))
+
+    def _refresh_list(self) -> None:
+        self._tree.clear()
+        rows = self._get_filtered_rows()
+        for row in rows:
+            stem = self.dataset_model.data(self.dataset_model.index(row, 0))
+            inspector = self.dataset_model.get_inspector(row) or "—"
+            self._tree.addTopLevelItem(QTreeWidgetItem([stem, inspector]))
+        self._summary_lbl.setText(f"{len(rows)} image(s) will be updated")
+        self._update_ok_state()
+
+    def _update_ok_state(self) -> None:
+        name_ok = bool(self._name_edit.text().strip())
+        rows_ok = self._tree.topLevelItemCount() > 0
+        self._ok_btn.setEnabled(name_ok and rows_ok)
+
+    def get_result(self) -> tuple[str, list[int]]:
+        """Return (inspector_name, filtered_row_indices) after dialog is accepted."""
+        return self._name_edit.text().strip(), self._get_filtered_rows()
 
 
 class MetadataSection(QWidget):
@@ -56,7 +154,7 @@ class MetadataSection(QWidget):
         self._set_all_btn = QPushButton("Set All")
         self._set_all_btn.setFixedWidth(60)
         self._set_all_btn.setToolTip(
-            "Apply session inspector to all reviewed images with no inspector set"
+            "Bulk-assign an inspector name to a filtered set of images"
         )
         self._set_all_btn.clicked.connect(self._on_set_all_inspectors)
         inspector_row.addWidget(self._set_all_btn)
@@ -117,38 +215,14 @@ class MetadataSection(QWidget):
             self.dataset_model.set_inspector(self._current_row, name)
 
     def _on_set_all_inspectors(self) -> None:
-        name = self._inspector_edit.text().strip() or self._session_inspector
-        if not name:
-            return
-
-        rows_to_update = [
-            row for row in range(self.dataset_model.rowCount())
-            if self.dataset_model.is_reviewed(row) and not self.dataset_model.get_inspector(row)
-        ]
-        if not rows_to_update:
-            return
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Set Inspector")
-        dlg_layout = QVBoxLayout(dialog)
-        dlg_layout.addWidget(
-            QLabel(f'Set inspector to "{name}" for {len(rows_to_update)} reviewed image(s):')
+        prefill = self._inspector_edit.text().strip()
+        dialog = _SetAllInspectorDialog(
+            self.dataset_model, prefill_name=prefill, parent=self
         )
-
-        list_widget = QListWidget()
-        for row in rows_to_update:
-            list_widget.addItem(self.dataset_model.data(self.dataset_model.index(row, 0)))
-        dlg_layout.addWidget(list_widget)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        dlg_layout.addWidget(buttons)
-
         if dialog.exec() != QDialog.Accepted:
             return
-
-        for row in rows_to_update:
+        name, rows = dialog.get_result()
+        for row in rows:
             self.dataset_model.set_inspector(row, name)
         self._load_fields()
 
