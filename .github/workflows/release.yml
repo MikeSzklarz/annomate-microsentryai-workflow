@@ -163,5 +163,6 @@ jobs:
           gh release create "$TAG" \
             artifacts/AnnoMate-CPU-windows-x64/* \
             artifacts/AnnoMate-CPU-macos-arm64/* \
+            --repo "$GITHUB_REPOSITORY" \
             --title "$TAG" \
             --generate-notes
